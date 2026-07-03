@@ -41,9 +41,10 @@ namespace NormalignRevitAgent
             Pane.Ready += () => { Handler.RequestContextSync(); RevitEvent.Raise(); };
 
             // Întrebare -> pe thread-ul Revit pentru context, apoi HTTP (în handler).
-            Pane.SendRequested += (message, chatId, deepThink) =>
+            // mode = "planning" (chat RAG) sau "edit" (bucla agentică cu tool-uri).
+            Pane.SendRequested += (message, chatId, deepThink, mode) =>
             {
-                Handler.EnqueueSend(new ChatSendRequest { Message = message, ChatId = chatId, DeepThink = deepThink });
+                Handler.EnqueueSend(new ChatSendRequest { Message = message, ChatId = chatId, DeepThink = deepThink, Mode = mode });
                 RevitEvent.Raise();
             };
 

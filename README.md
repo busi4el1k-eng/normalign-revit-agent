@@ -24,9 +24,19 @@ pe site). Construit ca să crească într-un asistent agentic (tool-use) fără 
   web, comutată automat după tema Revit (light/dark).
 - **Context live din editor**: numele modelului, view-ul activ și elementele
   selectate (categorie, tip, nivel, id) — trimise ca `ifcContext` la fiecare întrebare.
-- **Moduri Standard / Aprofundat** — aprofundat = flux SSE cu progres + raționament.
+- **Moduri Plan / Edit**:
+  - **Plan** = chatul RAG obișnuit (cu sub-modurile Standard / Aprofundat — aprofundat
+    = flux SSE cu progres + raționament). Răspunde și la întrebări despre interfața
+    Revit („cum fac o secțiune?") — serverul detectează intenția și sare peste RAG.
+  - **Edit** = buclă agentică (Claude tool-use prin `/api/agent`): agentul inspectează
+    modelul (interogări filtrate, detalii de elemente, avertismente, captură de view
+    pentru vision) și îl **modifică** (parametri, mutare, ștergere, evidențiere,
+    izolare) — fiecare operație în tranzacția ei, cu Undo separat în Revit. UI-ul
+    arată live tool-urile rulate.
 - **Buton Stop** — butonul de trimitere devine stop în timpul generării.
-- **Citări/surse clicabile** → PDF reader peste chat (`#page=N`).
+- **Citări/surse clicabile** → reader peste chat: normativele au taburi
+  **Conținut (markdown) + PDF** (`#page=N`), fișele tehnice au **Conținut** (nu există
+  PDF pentru ele); navigare pe pagini, imagini de pe CDN.
 - **Istoric conversații** — același cont și aceleași chat-uri ca pe web.
 - **Login în browser** (fără parole/chei în add-in) + **Logout**.
 
@@ -77,12 +87,17 @@ citește modelul Revit (pe thread-ul Revit, prin `ExternalEvent`) și hostează 
 | `Ui/ChatPaneProvider.cs` | Spune Revit-ului ce element WPF să pună în panou și unde (dreapta). |
 | `Assets/chat.html` | **UI-ul de chat** (stil Claude Code): markdown, citări clicabile, PDF reader, moduri standard/aprofundat, stop, istoric, logout, temă light/dark. Servit local (virtual host), fără rețea. |
 | `Assets/login.html` | Ecranul de login (buton „Conectează-te"). |
-| `Revit/RevitRequestHandler.cs` | **Seam-ul de thread Revit** (`IExternalEventHandler`). Citește modelul/view-ul/selecția pe thread-ul Revit, lansează HTTP-ul (anulabil), detectează tema. Aici se vor adăuga tool-urile agentice v2. |
-| `Services/NormalignApi.cs` | Client HTTP către backend: `/api/chat` (JSON standard **sau** flux SSE la aprofundat), `/api/history`, `/api/messages`. Pune tokenul Bearer per cerere. |
+| `Revit/RevitRequestHandler.cs` | **Seam-ul de thread Revit** (`IExternalEventHandler`). Citește modelul/view-ul/selecția pe thread-ul Revit, lansează HTTP-ul (anulabil), detectează tema. Rulează și tool-urile agentului (coadă `ToolExecRequest` + `TaskCompletionSource`), iar în modul Edit pornește `AgentRunner`. |
+| `Services/NormalignApi.cs` | Client HTTP către backend: `/api/chat` (JSON standard **sau** flux SSE la aprofundat), `/api/agent` (runde agentice), `/api/history`, `/api/messages`. Pune tokenul Bearer per cerere. |
+| `Services/AgentRunner.cs` | **Bucla agentică (modul Edit)**: ține transcriptul Anthropic pe client (serverul e stateless per rundă), execută tool-urile Revit primite de la server, împachetează capturile de view ca blocuri de imagine (vision), emite chip-urile de activitate în UI. |
 | `Services/AuthStore.cs` | Salvează/încarcă tokenul **criptat cu DPAPI** (`%APPDATA%\NormalignRevitAgent\auth.dat`). |
 | `Services/LoginServer.cs` | Login loopback (stil `gh auth login`): pornește `HttpListener` pe `127.0.0.1`, deschide browserul, capturează tokenul. |
 | `Services/Config.cs` | Doar `webUrl` (din `config.json` sau implicit prod). Fără secrete. |
-| `Tools/IRevitTool.cs`, `ToolRegistry.cs`, `GetModelSummaryTool.cs` | Registrul de „capabilități" peste model. v1 = rezumat model; v2 = query/tag/etc. |
+| `Tools/IRevitTool.cs`, `ToolRegistry.cs` | Registrul de capabilități: nume + descriere + **JSON Schema** per tool, `Declare(includeWrite)` produce lista pentru `/api/agent`; tool-urile de scriere se declară doar în Edit. |
+| `Tools/GetModelSummaryTool.cs` | Rezumatul modelului (niveluri cu cote, categorii, camere cu arii, tipuri de pereți) — folosit și ca `ifcContext.summary` la chat. |
+| `Tools/ReadTools.cs` | Tool-uri de citire: `query_elements` (filtre combinabile), `get_element_details`, `get_selection`, `list_levels_and_grids`, `list_family_types`, `get_active_view`, `get_model_warnings`. |
+| `Tools/WriteTools.cs` | Tool-uri de scriere (doar Edit, fiecare în `Transaction` proprie → Undo separat): `set_parameters`, `move_elements`, `delete_elements`, `override_color_in_view`, `isolate_in_view`; plus `select_and_show` (nu modifică modelul). |
+| `Tools/GetViewSnapshotTool.cs` | Exportă view-ul activ ca PNG → base64 → bloc de imagine pentru Claude (**vision** pe desen). |
 | `install.ps1` / `install.bat` | Build + copiere în `%APPDATA%\Autodesk\Revit\Addins\2027` (dev, fără admin). |
 | `installer/normalign-revit-agent.iss` | **Installer production** (Inno Setup): per-user, instalează WebView2 dacă lipsește, fără secrete. |
 | `installer/build-installer.ps1` | Build Release + descarcă bootstrapper WebView2 + compilează `.exe`. |
@@ -96,8 +111,12 @@ citește modelul Revit (pe thread-ul Revit, prin `ExternalEvent`) și hostează 
 | `src/app/api/desktop/token/route.ts` | Ruta protejată Clerk care emite tokenul după login. |
 | `src/app/desktop-auth/page.tsx` | Pagina de callback: după login cere tokenul și redirecționează pe `127.0.0.1:<port>`. |
 | `src/app/login/page.tsx` | Modificat: onorează `redirect_url` (doar căi relative same-origin). |
-| `src/app/api/chat/route.ts`, `history/route.ts`, `messages/route.ts` | Folosesc `getRequestUser()` în loc de doar Clerk. |
-| `src/proxy.ts` | `/api/chat`, `/api/history`, `/api/messages` trecute în lista publică (autorizarea se face în handler). |
+| `src/app/api/chat/route.ts`, `history/route.ts`, `messages/route.ts` | Folosesc `getRequestUser()` în loc de doar Clerk. `chat` primește `client:"revit"` → prompturi Revit + intent (normative / revit_howto / model / mixed; howto/model = răspuns direct, fără RAG). |
+| `src/app/api/agent/route.ts` | **Bucla agentului (Edit)**: o rundă stateless de tool-use — tool-urile Revit vin declarate de add-in; căutarea documentară (`search_normative`, `search_fise_tehnice`) o execută serverul în aceeași rundă. Persistă conversația la final. |
+| `src/lib/retrieval.ts` | Căutarea hibridă (Qdrant + SPLADE + Cohere) extrasă din ruta de chat, partajată cu `/api/agent`. |
+| `src/lib/prompts/revit.ts` | Prompturile specifice clientului Revit: bloc de context, reguli de răspuns direct, reguli de agent. |
+| `src/proxy.ts` | `/api/chat`, `/api/agent`, `/api/history`, `/api/messages` trecute în lista publică (autorizarea se face în handler). |
+| `nginx.conf` (root) | `client_max_body_size 20m` + timeout mare pe `/api/agent` (transcript cu capturi de view). |
 
 ---
 

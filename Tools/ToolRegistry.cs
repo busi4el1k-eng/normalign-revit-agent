@@ -1,13 +1,13 @@
 using System.Collections.Generic;
+using System.Text.Json.Nodes;
 
 namespace NormalignRevitAgent.Tools
 {
     /// <summary>
-    /// Holds every Revit capability the agent can use, keyed by tool name.
-    ///
-    /// v1 only exposes get_model_summary. To go agentic, add more IRevitTool
-    /// implementations here and have the server-side agent loop select one by
-    /// name — no other part of the add-in has to change.
+    /// Toate capabilitățile Revit ale agentului, pe nume. Bucla de agent de pe
+    /// server primește declarația (nume + descriere + schema argumentelor) prin
+    /// <see cref="Declare"/>; execuția se face pe thread-ul Revit prin
+    /// RevitRequestHandler (TryGet + Execute).
     /// </summary>
     public class ToolRegistry
     {
@@ -19,8 +19,23 @@ namespace NormalignRevitAgent.Tools
         {
             var all = new IRevitTool[]
             {
+                // citire
                 GetModelSummary,
-                // v2: new QueryElementsTool(), new TagElementTool(), ...
+                new QueryElementsTool(),
+                new GetElementDetailsTool(),
+                new GetSelectionTool(),
+                new ListLevelsAndGridsTool(),
+                new ListFamilyTypesTool(),
+                new GetActiveViewTool(),
+                new GetModelWarningsTool(),
+                new GetViewSnapshotTool(),
+                new SelectAndShowTool(),
+                // scriere (doar modul Edit)
+                new SetParametersTool(),
+                new MoveElementsTool(),
+                new DeleteElementsTool(),
+                new OverrideColorInViewTool(),
+                new IsolateInViewTool(),
             };
             _byName = new Dictionary<string, IRevitTool>();
             foreach (var t in all)
@@ -30,5 +45,25 @@ namespace NormalignRevitAgent.Tools
         public bool TryGet(string name, out IRevitTool tool) => _byName.TryGetValue(name, out tool!);
 
         public IEnumerable<IRevitTool> All => _byName.Values;
+
+        /// <summary>
+        /// Declarația tool-urilor pentru /api/agent (format Anthropic tools).
+        /// Cu includeWrite=false rămân doar tool-urile de citire.
+        /// </summary>
+        public JsonArray Declare(bool includeWrite)
+        {
+            var arr = new JsonArray();
+            foreach (IRevitTool t in _byName.Values)
+            {
+                if (t.IsWrite && !includeWrite) continue;
+                arr.Add(new JsonObject
+                {
+                    ["name"] = t.Name,
+                    ["description"] = t.Description,
+                    ["input_schema"] = JsonNode.Parse(t.InputSchema),
+                });
+            }
+            return arr;
+        }
     }
 }

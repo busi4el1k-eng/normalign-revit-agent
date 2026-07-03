@@ -1,25 +1,35 @@
-using Autodesk.Revit.DB;
+using Autodesk.Revit.UI;
 
 namespace NormalignRevitAgent.Tools
 {
     /// <summary>
-    /// A single capability the add-in exposes over the live Revit model.
+    /// O capabilitate a add-in-ului asupra modelului Revit deschis.
     ///
-    /// This is the "seam" that makes v1 upgrade to an agentic v2 without a rewrite:
-    /// today we call GetModelSummary directly; tomorrow the server-side agent loop
-    /// will pick a tool by <see cref="Name"/>, and we execute it here on Revit's
-    /// thread and return the JSON/text result. Every future capability
-    /// (query_walls, tag_element, ...) is just another IRevitTool.
+    /// v2 (agentic): bucla de agent de pe server (Claude tool-use, /api/agent)
+    /// alege un tool după <see cref="Name"/>; îl executăm aici, pe thread-ul
+    /// Revit (prin ExternalEvent), și întoarcem rezultatul text/JSON.
+    /// Tool-urile cu <see cref="IsWrite"/> = true modifică modelul (fiecare în
+    /// propria tranzacție, deci cu Undo separat) și sunt declarate serverului
+    /// doar în modul Edit.
     /// </summary>
     public interface IRevitTool
     {
-        /// <summary>Stable machine name the LLM will reference, e.g. "get_model_summary".</summary>
+        /// <summary>Numele stabil folosit de LLM, ex. "get_model_summary".</summary>
         string Name { get; }
 
-        /// <summary>Human/LLM description of what the tool does.</summary>
+        /// <summary>Descrierea pentru LLM (ce face, când se folosește).</summary>
         string Description { get; }
 
-        /// <summary>Run the tool against the current document. argsJson is "{}" when there are no args.</summary>
-        string Execute(Document? doc, string argsJson);
+        /// <summary>JSON Schema (ca string) pentru argumentele tool-ului.</summary>
+        string InputSchema { get; }
+
+        /// <summary>True dacă tool-ul modifică modelul — expus doar în modul Edit.</summary>
+        bool IsWrite { get; }
+
+        /// <summary>
+        /// Rulează tool-ul. Se apelează DOAR pe thread-ul Revit (din
+        /// RevitRequestHandler.Execute). argsJson este "{}" când nu există argumente.
+        /// </summary>
+        string Execute(UIApplication app, string argsJson);
     }
 }

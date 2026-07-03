@@ -39,6 +39,8 @@ namespace NormalignRevitAgent.Services
                 ["message"] = message,
                 ["chatId"] = chatId,
                 ["deepThink"] = deepThink,
+                // Serverul adaptează prompturile (interfață Revit, model live, intent)
+                ["client"] = "revit",
                 ["ifcContext"] = new JsonObject { ["fileName"] = fileName, ["summary"] = context }
             };
 
@@ -108,8 +110,46 @@ namespace NormalignRevitAgent.Services
             ["chatId"] = data["chatId"]?.DeepClone(),
             ["followUps"] = data["followUpQuestions"]?.DeepClone(),
             ["citations"] = data["metadata"]?["citations"]?.DeepClone(),
+            // doc_code -> "normative" | "fise_tehnice" — UI-ul alege reader-ul
+            // potrivit (normativ = MD + PDF, fișă tehnică = doar MD).
+            ["sourceTypes"] = data["metadata"]?["sourceTypes"]?.DeepClone(),
             ["thinking"] = data["metadata"]?["thinking"]?.DeepClone(),
         };
+
+        /// <summary>
+        /// O rundă a agentului (modul Edit): trimite transcriptul complet + tool-urile
+        /// declarate; primește fie tool_calls de executat în Revit, fie răspunsul final.
+        /// </summary>
+        public async Task<JsonObject> AgentRoundAsync(string question, string? chatId,
+            JsonArray transcript, JsonArray tools, string fileName, string context, CancellationToken ct)
+        {
+            var body = new JsonObject
+            {
+                ["question"] = question,
+                ["chatId"] = chatId,
+                ["transcript"] = transcript.DeepClone(),
+                ["tools"] = tools.DeepClone(),
+                ["ifcContext"] = new JsonObject { ["fileName"] = fileName, ["summary"] = context },
+            };
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{Config.WebUrl}/api/agent")
+            {
+                Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+            Authorize(req);
+
+            using HttpResponseMessage resp = await Http.SendAsync(req, ct);
+            string json = await resp.Content.ReadAsStringAsync(ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                string hint = (int)resp.StatusCode == 401
+                    ? " Sesiunea a expirat — Logout și Login din nou." : "";
+                string detail = "";
+                try { detail = JsonNode.Parse(json)?["error"]?.GetValue<string>() ?? ""; } catch { }
+                throw new Exception($"Server {(int)resp.StatusCode}.{hint} {detail}".Trim());
+            }
+            return JsonNode.Parse(json) as JsonObject ?? new JsonObject();
+        }
 
         public async Task<JsonNode> GetHistoryAsync()
         {

@@ -19,19 +19,31 @@ namespace NormalignRevitAgent.Revit
         public string Message = "";
         public string? ChatId;
         public bool DeepThink;
+        /// <summary>"planning" = chatul RAG obișnuit; "edit" = bucla agentică.</summary>
+        public string Mode = "planning";
+    }
+
+    /// <summary>Un tool cerut de agent, de executat pe thread-ul Revit.</summary>
+    public class ToolExecRequest
+    {
+        public string Name = "";
+        public string ArgsJson = "{}";
+        public readonly TaskCompletionSource<string> Tcs =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     /// <summary>
     /// Puntea de thread-uri dintre chat și API-ul Revit. API-ul Revit e legal doar
     /// pe thread-ul Revit; punem cererea în coadă, Raise() pe ExternalEvent, iar
-    /// Revit apelează Execute() unde citim documentul (model, view activ, selecție).
-    /// HTTP-ul pleacă apoi pe thread pool, anulabil prin CancellationTokenSource.
+    /// Revit apelează Execute() unde citim documentul (model, view activ, selecție)
+    /// sau rulăm tool-urile agentului. HTTP-ul pleacă apoi pe thread pool, anulabil.
     /// </summary>
     public class RevitRequestHandler : IExternalEventHandler
     {
         private readonly ToolRegistry _tools = new();
         private readonly NormalignApi _api = new();
         private readonly ConcurrentQueue<ChatSendRequest> _sendQueue = new();
+        private readonly ConcurrentQueue<ToolExecRequest> _toolQueue = new();
         private int _contextSyncPending;
         private CancellationTokenSource? _currentCts;
 
@@ -53,6 +65,20 @@ namespace NormalignRevitAgent.Revit
             if (Interlocked.Exchange(ref _contextSyncPending, 0) == 1)
                 PushContextChip(uidoc);
 
+            // Tool-urile agentului au prioritate: bucla lui așteaptă rezultatul.
+            while (_toolQueue.TryDequeue(out ToolExecRequest? tr))
+            {
+                string result;
+                try
+                {
+                    result = _tools.TryGet(tr.Name, out IRevitTool tool)
+                        ? tool.Execute(app, tr.ArgsJson)
+                        : $"Eroare: tool necunoscut '{tr.Name}'.";
+                }
+                catch (Exception ex) { result = $"Eroare: {ex.Message}"; }
+                tr.Tcs.TrySetResult(result);
+            }
+
             while (_sendQueue.TryDequeue(out ChatSendRequest? req))
             {
                 (string fileName, string context) = BuildContext(uidoc);
@@ -66,8 +92,20 @@ namespace NormalignRevitAgent.Revit
                 {
                     try
                     {
-                        await _api.SendChatAsync(local.Message, local.ChatId, fileName, context,
-                            local.DeepThink, msg => App.Pane?.PostJson(msg), cts.Token);
+                        if (local.Mode == "edit")
+                        {
+                            // Bucla agentică: serverul decide tool-urile, noi le executăm
+                            // pe thread-ul Revit prin coada de mai sus.
+                            var runner = new AgentRunner(_api, ExecuteToolAsync);
+                            await runner.RunAsync(local.Message, local.ChatId, fileName, context,
+                                _tools.Declare(includeWrite: true),
+                                msg => App.Pane?.PostJson(msg), cts.Token);
+                        }
+                        else
+                        {
+                            await _api.SendChatAsync(local.Message, local.ChatId, fileName, context,
+                                local.DeepThink, msg => App.Pane?.PostJson(msg), cts.Token);
+                        }
                     }
                     catch (OperationCanceledException)
                     {
@@ -84,6 +122,18 @@ namespace NormalignRevitAgent.Revit
                     }
                 });
             }
+        }
+
+        /// <summary>
+        /// Programează un tool pe thread-ul Revit și așteaptă rezultatul.
+        /// Apelabil de pe orice thread (folosit de AgentRunner).
+        /// </summary>
+        private Task<string> ExecuteToolAsync(string name, string argsJson)
+        {
+            var tr = new ToolExecRequest { Name = name, ArgsJson = argsJson };
+            _toolQueue.Enqueue(tr);
+            App.RevitEvent?.Raise();
+            return tr.Tcs.Task;
         }
 
         /// <summary>Chip-ul de context din input (doc · view · selecție) + tema Revit.</summary>
@@ -122,7 +172,7 @@ namespace NormalignRevitAgent.Revit
 
             AppendSelection(sb, uidoc!, doc);
             sb.AppendLine();
-            sb.Append(_tools.GetModelSummary.Execute(doc, "{}"));
+            sb.Append(GetModelSummaryTool.Summarize(doc));
             return ($"{doc.Title}.rvt", sb.ToString());
         }
 

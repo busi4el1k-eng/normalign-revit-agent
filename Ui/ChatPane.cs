@@ -28,7 +28,8 @@ namespace NormalignRevitAgent.Ui
         private bool _coreReady;
 
         public event Action? Ready;
-        public event Action<string, string?, bool>? SendRequested;
+        // message, chatId, deepThink, mode ("planning" | "edit")
+        public event Action<string, string?, bool, string>? SendRequested;
         public event Action? StopRequested;
         public event Action? HistoryRequested;
         public event Action<string>? MessagesRequested;
@@ -127,7 +128,10 @@ namespace NormalignRevitAgent.Ui
                         string? chatId = root.TryGetProperty("chatId", out JsonElement c) &&
                                          c.ValueKind == JsonValueKind.String ? c.GetString() : null;
                         bool deep = root.TryGetProperty("deepThink", out JsonElement dt) && dt.ValueKind == JsonValueKind.True;
-                        if (!string.IsNullOrWhiteSpace(msg)) SendRequested?.Invoke(msg, chatId, deep);
+                        string mode = root.TryGetProperty("mode", out JsonElement md) &&
+                                      md.ValueKind == JsonValueKind.String && md.GetString() == "edit"
+                                      ? "edit" : "planning";
+                        if (!string.IsNullOrWhiteSpace(msg)) SendRequested?.Invoke(msg, chatId, deep, mode);
                         break;
                     case "stop":
                         StopRequested?.Invoke();
