@@ -1,22 +1,45 @@
+using System;
+using System.IO;
+using System.Text.Json;
+
 namespace NormalignRevitAgent.Services
 {
     /// <summary>
-    /// Central configuration for the add-in.
+    /// Configuration for the add-in. The pane hosts the real Normalign web app,
+    /// so the only setting that matters is which URL to load.
     ///
-    /// AUTH NOTE: your /api/chat route is Clerk-protected (src/proxy.ts), so a
-    /// desktop add-in cannot call it as-is. Before this works end-to-end you must
-    /// EITHER:
-    ///   (a) add a machine-to-machine API-key path to the chat route and put the
-    ///       key in <see cref="ApiKey"/> (sent as a Bearer token), OR
-    ///   (b) run the web app locally and point ChatUrl at http://localhost:3000.
-    /// Until then the call will 401 / redirect to login.
+    /// Override per-machine (e.g. local dev) without rebuilding by creating:
+    ///   %APPDATA%\NormalignRevitAgent\config.json
+    ///   { "webUrl": "http://localhost:3000" }
     /// </summary>
     public static class Config
     {
-        // Point at prod, or "http://localhost:3000/api/chat" for local dev.
-        public static string ChatUrl = "https://normalign.com/api/chat";
+        private const string DefaultWebUrl = "https://normalign.com";
 
-        // Bearer token for the (to-be-added) API-key auth path. Leave empty for now.
-        public static string ApiKey = "";
+        public static string WebUrl { get; } = Load();
+
+        /// <summary>Browser profile folder — keeps the Clerk login persistent between sessions.</summary>
+        public static string WebViewUserDataFolder =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                         "NormalignRevitAgent", "WebView2");
+
+        private static string Load()
+        {
+            try
+            {
+                string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                           "NormalignRevitAgent", "config.json");
+                if (File.Exists(path))
+                {
+                    using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path));
+                    if (doc.RootElement.TryGetProperty("webUrl", out JsonElement url) &&
+                        url.ValueKind == JsonValueKind.String &&
+                        !string.IsNullOrWhiteSpace(url.GetString()))
+                        return url.GetString()!.TrimEnd('/');
+                }
+            }
+            catch { /* fall back to default on any parse/IO problem */ }
+            return DefaultWebUrl;
+        }
     }
 }

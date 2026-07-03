@@ -1,164 +1,166 @@
+using System;
+using System.Diagnostics;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
-using Autodesk.Revit.UI;
-using NormalignRevitAgent.Revit;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
 using NormalignRevitAgent.Services;
-// Autodesk.Revit.UI also defines a TextBox; disambiguate to the WPF one.
-using TextBox = System.Windows.Controls.TextBox;
 
 namespace NormalignRevitAgent.Ui
 {
     /// <summary>
-    /// The chat panel hosted in the dockable pane. Built in code (no XAML) to
-    /// keep the project self-contained. Layout: scrolling message list on top,
-    /// input box + Send button at the bottom.
+    /// The dockable pane: hosts the real Normalign web app in WebView2, so the
+    /// chat inside Revit IS the production chat — same markdown rendering,
+    /// citations, style profiles, history sidebar and Clerk auth as the site.
     ///
-    /// Flow when the user sends a message:
-    ///   1. Add the user's bubble to the list.
-    ///   2. Enqueue a ChatRequest and Raise the ExternalEvent — this hops onto
-    ///      Revit's thread (see RevitRequestHandler) so the model can be read.
-    ///   3. The reply callback marshals back to the UI thread via Dispatcher.
+    /// The only Revit-specific piece is the JS bridge:
+    ///   web  -> host : { type: "normalign-ready" }   (page mounted, wants the model)
+    ///   host -> web  : { type: "revit-model", fileName, summary }
+    /// The web app then attaches the summary to every question as ifcContext —
+    /// the contract the backend already understands.
     /// </summary>
     public class ChatPane : UserControl
     {
-        private readonly ExternalEvent _revitEvent;
-        private readonly RevitRequestHandler _handler;
+        private readonly WebView2 _web = new();
+        private readonly Grid _overlay;      // dark loading / error chrome (Claude-extension style)
+        private readonly TextBlock _overlayTitle;
+        private readonly TextBlock _overlayDetail;
 
-        private readonly StackPanel _messages;
-        private readonly ScrollViewer _scroll;
-        private readonly TextBox _input;
-        private readonly Button _send;
+        /// <summary>Raised when the web app announced it is mounted and wants the model.</summary>
+        public event Action? WebAppReady;
 
-        private string? _chatId; // keeps the conversation threaded server-side
+        private static readonly Brush Bg = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x1e));
+        private static readonly Brush FgDim = new SolidColorBrush(Color.FromRgb(0x9d, 0x9d, 0x9d));
+        private static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(0xd9, 0x77, 0x57));
 
-        public ChatPane(ExternalEvent revitEvent, RevitRequestHandler handler)
+        public ChatPane()
         {
-            _revitEvent = revitEvent;
-            _handler = handler;
-
-            _messages = new StackPanel { Margin = new Thickness(8) };
-            _scroll = new ScrollViewer
+            _overlayTitle = new TextBlock
             {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Content = _messages
+                Text = "Normalign",
+                FontSize = 22,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Accent,
+                HorizontalAlignment = HorizontalAlignment.Center
             };
-            Grid.SetRow(_scroll, 0);
-
-            _input = new TextBox
+            _overlayDetail = new TextBlock
             {
-                AcceptsReturn = false,
+                Text = "Se conectează…",
+                FontSize = 12,
+                Foreground = FgDim,
                 TextWrapping = TextWrapping.Wrap,
-                MinHeight = 46,
-                Margin = new Thickness(8, 4, 4, 8),
-                VerticalContentAlignment = VerticalAlignment.Center
+                TextAlignment = TextAlignment.Center,
+                MaxWidth = 320,
+                Margin = new Thickness(0, 10, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Center
             };
-            _input.KeyDown += (_, e) =>
+
+            var overlayStack = new StackPanel
             {
-                if (e.Key == Key.Enter) { e.Handled = true; OnSend(); }
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center
             };
+            overlayStack.Children.Add(_overlayTitle);
+            overlayStack.Children.Add(_overlayDetail);
 
-            _send = new Button
-            {
-                Content = "Trimite",
-                MinWidth = 80,
-                Margin = new Thickness(0, 4, 8, 8)
-            };
-            _send.Click += (_, _) => OnSend();
+            _overlay = new Grid { Background = Bg };
+            _overlay.Children.Add(overlayStack);
 
-            var inputRow = new DockPanel();
-            DockPanel.SetDock(_send, Dock.Right);
-            inputRow.Children.Add(_send);
-            inputRow.Children.Add(_input);
-            Grid.SetRow(inputRow, 1);
+            var root = new Grid { Background = Bg };
+            root.Children.Add(_web);
+            root.Children.Add(_overlay);
+            Content = root;
 
-            var grid = new Grid();
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.Children.Add(_scroll);
-            grid.Children.Add(inputRow);
-
-            Content = grid;
-
-            AddBubble("Normalign", "Salut! Întreabă-mă despre normative sau despre modelul Revit deschis.", isUser: false);
+            _web.DefaultBackgroundColor = System.Drawing.Color.FromArgb(0x1e, 0x1e, 0x1e);
+            Loaded += async (_, _) => await EnsureInitializedAsync();
         }
 
-        private void OnSend()
+        private bool _initStarted;
+
+        private async System.Threading.Tasks.Task EnsureInitializedAsync()
         {
-            string text = _input.Text?.Trim() ?? "";
-            if (text.Length == 0) return;
+            if (_initStarted) return;
+            _initStarted = true;
 
-            AddBubble("Tu", text, isUser: true);
-            _input.Clear();
-            SetBusy(true);
-
-            var thinking = AddBubble("Normalign", "…", isUser: false);
-
-            _handler.Enqueue(new ChatRequest
+            try
             {
-                Question = text,
-                ChatId = _chatId,
-                OnReply = result => Dispatcher.Invoke(() =>
-                {
-                    _chatId = result.ChatId ?? _chatId;
-                    thinking.Text = result.Content;
-                    if (result.FollowUpQuestions.Count > 0)
-                        thinking.Text += "\n\nÎntrebări sugerate:\n• " + string.Join("\n• ", result.FollowUpQuestions);
-                    SetBusy(false);
-                    ScrollToEnd();
-                }),
-                OnError = err => Dispatcher.Invoke(() =>
-                {
-                    thinking.Text = "Eroare: " + err;
-                    thinking.Foreground = Brushes.IndianRed;
-                    SetBusy(false);
-                    ScrollToEnd();
-                })
-            });
+                var env = await CoreWebView2Environment.CreateAsync(
+                    userDataFolder: Config.WebViewUserDataFolder);
+                await _web.EnsureCoreWebView2Async(env);
 
-            // Hop onto Revit's thread to read the model + call the backend.
-            _revitEvent.Raise();
+                CoreWebView2 core = _web.CoreWebView2;
+                core.Settings.AreDefaultContextMenusEnabled = false;
+                core.Settings.AreDevToolsEnabled = false;
+                core.Settings.IsStatusBarEnabled = false;
+
+                // Citation PDFs / external links open in the system browser.
+                core.NewWindowRequested += (_, e) =>
+                {
+                    e.Handled = true;
+                    try { Process.Start(new ProcessStartInfo(e.Uri) { UseShellExecute = true }); } catch { }
+                };
+
+                core.WebMessageReceived += OnWebMessage;
+                core.NavigationCompleted += (_, e) =>
+                {
+                    if (e.IsSuccess) HideOverlay();
+                    else ShowError($"Nu am putut încărca {Config.WebUrl} (cod {e.WebErrorStatus}). Verifică conexiunea la internet.");
+                };
+
+                core.Navigate(Config.WebUrl);
+            }
+            catch (Exception ex)
+            {
+                // Most likely: WebView2 Evergreen Runtime missing on this PC.
+                ShowError(
+                    "Nu am putut porni componenta de browser (WebView2). " +
+                    "Instalează \"WebView2 Evergreen Runtime\" de la Microsoft și repornește Revit.\n\n" +
+                    ex.Message);
+            }
         }
 
-        private TextBlock AddBubble(string author, string text, bool isUser)
+        private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
-            var body = new TextBlock
+            try
             {
-                Text = text,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 2, 0, 0)
-            };
-
-            var border = new Border
-            {
-                Background = isUser ? Brushes.LightSteelBlue : new SolidColorBrush(Color.FromRgb(238, 238, 238)),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(10, 6, 10, 8),
-                Margin = new Thickness(0, 4, 0, 4),
-                HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left,
-                MaxWidth = 460,
-                Child = new StackPanel
+                using JsonDocument doc = JsonDocument.Parse(e.TryGetWebMessageAsString());
+                if (doc.RootElement.TryGetProperty("type", out JsonElement t) &&
+                    t.GetString() == "normalign-ready")
                 {
-                    Children =
-                    {
-                        new TextBlock { Text = author, FontWeight = FontWeights.Bold, FontSize = 11, Opacity = 0.7 },
-                        body
-                    }
+                    WebAppReady?.Invoke();
                 }
-            };
-
-            _messages.Children.Add(border);
-            ScrollToEnd();
-            return body; // returned so the caller can update it in place (e.g. "…" -> answer)
+            }
+            catch { /* ignore malformed messages */ }
         }
 
-        private void SetBusy(bool busy)
+        /// <summary>
+        /// Push the live model context into the web app. Safe to call from any
+        /// thread — marshals itself onto the UI thread.
+        /// </summary>
+        public void PostModel(string fileName, string summary)
         {
-            _send.IsEnabled = !busy;
-            _input.IsEnabled = !busy;
+            Dispatcher.BeginInvoke(() =>
+            {
+                CoreWebView2? core = _web.CoreWebView2;
+                if (core == null) return;
+                string json = JsonSerializer.Serialize(new
+                {
+                    type = "revit-model",
+                    fileName,
+                    summary
+                });
+                core.PostWebMessageAsJson(json);
+            });
         }
 
-        private void ScrollToEnd() => _scroll.ScrollToEnd();
+        private void HideOverlay() => _overlay.Visibility = Visibility.Collapsed;
+
+        private void ShowError(string message)
+        {
+            _overlay.Visibility = Visibility.Visible;
+            _overlayDetail.Text = message;
+        }
     }
 }

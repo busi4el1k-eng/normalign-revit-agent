@@ -30,9 +30,14 @@ $addins = Join-Path $env:APPDATA "Autodesk\Revit\Addins\$RevitVersion"
 $target = Join-Path $addins "NormalignRevitAgent"
 New-Item -ItemType Directory -Force -Path $target | Out-Null
 
-# 3. Deploy: DLL (+ deps) into subfolder, manifest next to it in the Addins root.
-Copy-Item "$repo\bin\NormalignRevitAgent.dll" $target -Force
-Copy-Item "$repo\bin\NormalignRevitAgent.pdb" $target -Force -ErrorAction SilentlyContinue
+# 3. Deploy: our DLL + dependency DLLs (WebView2 SDK) + the native loader,
+#    manifest next to the subfolder in the Addins root.
+Copy-Item "$repo\bin\*.dll" $target -Force
+Copy-Item "$repo\bin\*.pdb" $target -Force -ErrorAction SilentlyContinue
+Copy-Item "$repo\bin\NormalignRevitAgent.deps.json" $target -Force -ErrorAction SilentlyContinue
+if (Test-Path "$repo\bin\runtimes") {
+    Copy-Item "$repo\bin\runtimes" $target -Recurse -Force
+}
 Copy-Item "$repo\NormalignRevitAgent.addin" $addins -Force
 
 # 4. Clean up the obsolete ProgramData copy if a previous install left one.

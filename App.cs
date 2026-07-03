@@ -1,8 +1,8 @@
 using System;
 using System.Reflection;
 using Autodesk.Revit.UI;
+using Autodesk.Revit.UI.Events;
 using NormalignRevitAgent.Revit;
-using NormalignRevitAgent.Services;
 using NormalignRevitAgent.Ui;
 
 namespace NormalignRevitAgent
@@ -12,9 +12,9 @@ namespace NormalignRevitAgent
     /// "Application", so OnStartup runs once when Revit launches.
     ///
     /// Responsibilities:
-    ///   1. Build the shared services (HTTP client + Revit request handler).
-    ///   2. Register the dockable chat pane.
-    ///   3. Add a ribbon button that shows the pane.
+    ///   1. Build the shared services (WebView2 chat pane + Revit request handler).
+    ///   2. Register the dockable chat pane and the ribbon button.
+    ///   3. Keep the web app's model context in sync with the active document.
     /// </summary>
     public class App : IExternalApplication
     {
@@ -23,7 +23,7 @@ namespace NormalignRevitAgent
             new DockablePaneId(new Guid("8d07224f-5b91-40ff-931f-ababe3976d28"));
 
         // The single external event used to run Revit-API work on Revit's thread.
-        // v1 uses it to read the model; v2 will reuse it to run agent tool calls.
+        // v1 syncs the model summary; v2 will reuse it to run agent tool calls.
         public static ExternalEvent? RevitEvent { get; private set; }
         public static RevitRequestHandler? Handler { get; private set; }
         public static ChatPane? Pane { get; private set; }
@@ -31,10 +31,20 @@ namespace NormalignRevitAgent
         public Result OnStartup(UIControlledApplication app)
         {
             // --- shared services ---
-            var client = new NormalignClient();
-            Handler = new RevitRequestHandler(client);
+            Handler = new RevitRequestHandler();
             RevitEvent = ExternalEvent.Create(Handler);
-            Pane = new ChatPane(RevitEvent, Handler);
+            Pane = new ChatPane();
+
+            // Web app mounted inside the pane -> push the current model context.
+            Pane.WebAppReady += () =>
+            {
+                Handler.RequestSync();
+                RevitEvent.Raise();
+            };
+
+            // User switched project/view in Revit -> re-sync (deduped by doc title).
+            // ViewActivated runs in a valid API context, so we can read directly.
+            app.ViewActivated += OnViewActivated;
 
             // --- dockable pane ---
             app.RegisterDockablePane(PaneId, "Normalign Agent", new ChatPaneProvider(Pane));
@@ -59,6 +69,16 @@ namespace NormalignRevitAgent
             return Result.Succeeded;
         }
 
-        public Result OnShutdown(UIControlledApplication app) => Result.Succeeded;
+        private void OnViewActivated(object? sender, ViewActivatedEventArgs e)
+        {
+            try { Handler?.SyncFromDoc(e.Document); }
+            catch { /* never let a sync error break view switching */ }
+        }
+
+        public Result OnShutdown(UIControlledApplication app)
+        {
+            app.ViewActivated -= OnViewActivated;
+            return Result.Succeeded;
+        }
     }
 }

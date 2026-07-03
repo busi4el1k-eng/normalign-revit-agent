@@ -1,73 +1,55 @@
-using System;
-using System.Collections.Concurrent;
-using System.Threading.Tasks;
+using System.Threading;
+using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
-using NormalignRevitAgent.Services;
 using NormalignRevitAgent.Tools;
 
 namespace NormalignRevitAgent.Revit
 {
-    /// <summary>One pending chat turn queued from the UI thread.</summary>
-    public class ChatRequest
-    {
-        public string Question = "";
-        public string? ChatId;
-        public Action<ChatResult> OnReply = _ => { };
-        public Action<string> OnError = _ => { };
-    }
-
     /// <summary>
-    /// THE key piece of the architecture.
+    /// The threading seam between the embedded web app and the Revit API.
     ///
-    /// The Revit API can only be touched from Revit's own thread, inside an
-    /// event Revit raised. A button click in our WPF pane is NOT such a context.
-    /// So the pane enqueues a request and raises an ExternalEvent; Revit then
-    /// calls Execute() below on its thread, where reading the document is legal.
+    /// The Revit API is only legal on Revit's thread, inside a Revit-raised
+    /// event. The WebView2 "ready" message arrives on the UI thread, so we mark
+    /// a pending sync and Raise() the ExternalEvent; Revit then calls Execute()
+    /// in a valid context where the model can be read.
     ///
-    /// v1: Execute reads the model, then fires the HTTP call to Normalign.
-    /// v2 (agentic): Execute will instead run whatever tool the LLM asked for
-    ///     (query walls, tag elements, ...) via <see cref="ToolRegistry"/> and
-    ///     return the result to the server loop. The threading seam stays the same.
+    /// v2 (agentic): the same Execute() will dispatch LLM tool calls from the
+    /// ToolRegistry (query_elements, tag_element, ...) — only the message
+    /// payload grows, the threading model stays identical.
     /// </summary>
     public class RevitRequestHandler : IExternalEventHandler
     {
-        private readonly ConcurrentQueue<ChatRequest> _queue = new();
-        private readonly NormalignClient _client;
         private readonly ToolRegistry _tools = new();
+        private int _syncPending;
+        private string? _lastSyncedTitle;
 
-        public RevitRequestHandler(NormalignClient client) => _client = client;
-
-        /// <summary>Called from the UI thread. Pair with App.RevitEvent.Raise().</summary>
-        public void Enqueue(ChatRequest request) => _queue.Enqueue(request);
+        /// <summary>Called from any thread. Pair with App.RevitEvent.Raise().</summary>
+        public void RequestSync() => Interlocked.Exchange(ref _syncPending, 1);
 
         public string GetName() => "Normalign Agent";
 
-        // Runs on Revit's thread — safe to read the document here.
+        // Runs on Revit's thread (ExternalEvent).
         public void Execute(UIApplication app)
         {
-            while (_queue.TryDequeue(out ChatRequest? req))
-            {
-                var doc = app.ActiveUIDocument?.Document;
+            if (Interlocked.Exchange(ref _syncPending, 0) == 0) return;
+            SyncFromDoc(app.ActiveUIDocument?.Document, force: true);
+        }
 
-                // v1: the only "tool" we run is a read-only model summary.
-                string summary = _tools.GetModelSummary.Execute(doc, "{}");
+        /// <summary>
+        /// Extract the live model summary and push it into the web app.
+        /// Must be called in a valid Revit API context (Execute or a Revit event
+        /// like ViewActivated). Skips the work if this document was already sent,
+        /// unless <paramref name="force"/> is set.
+        /// </summary>
+        public void SyncFromDoc(Document? doc, bool force = false)
+        {
+            string title = doc?.Title ?? "";
+            if (!force && title == _lastSyncedTitle) return;
+            _lastSyncedTitle = title;
 
-                // The HTTP call must NOT block Revit's thread, so hand it to the
-                // thread pool. The UI callbacks marshal themselves back with Dispatcher.
-                ChatRequest local = req;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        ChatResult result = await _client.AskAsync(local.Question, summary, local.ChatId);
-                        local.OnReply(result);
-                    }
-                    catch (Exception ex)
-                    {
-                        local.OnError(ex.Message);
-                    }
-                });
-            }
+            string fileName = string.IsNullOrEmpty(title) ? "Model Revit" : $"{title}.rvt";
+            string summary = _tools.GetModelSummary.Execute(doc, "{}");
+            App.Pane?.PostModel(fileName, summary);
         }
     }
 }
