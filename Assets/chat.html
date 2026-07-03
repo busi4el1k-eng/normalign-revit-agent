@@ -150,6 +150,16 @@
   #amodes .mode.active.am-edit{color:#d9822b}
   #modes.hidden{display:none}
 
+  /* Bara de confirmare a agentului (Da/Nu pentru modificări) */
+  .confirmbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;
+    border:1px solid color-mix(in srgb,#d9822b 45%,var(--border));border-radius:10px;padding:8px 10px}
+  .confirmbar .clabel{font-size:12px;color:var(--muted-foreground);flex:1;min-width:140px}
+  .cbtn{font-size:12px;font-weight:600;border-radius:8px;padding:5px 14px;border:1px solid var(--border)}
+  .cbtn.yes{background:#d9822b;color:#fff;border-color:#d9822b}
+  .cbtn.yes:hover{filter:brightness(1.1)}
+  .cbtn.no{color:var(--muted-foreground)}
+  .cbtn.no:hover{background:var(--muted);color:var(--foreground)}
+
   /* Activitatea agentului (tool-uri) în bula de progres */
   .tact{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted-foreground);
     margin-top:5px;padding:3px 8px;border:1px solid var(--border);border-radius:7px;width:fit-content}
@@ -366,6 +376,23 @@ function reasonBlock(text){
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3a5 5 0 0 0-3 9c.6.5 1 1.2 1 2v1h4v-1c0-.8.4-1.5 1-2a5 5 0 0 0-3-9z"/></svg>'+
     'Raționament</summary><div class="rbody">'+esc(text)+"</div></details>";
 }
+// ── Confirmarea agentului: linia "[CONFIRMĂ] ..." devine butoane Da/Nu ─────
+function stripConfirm(content){
+  const m=content.match(/\n?\[CONFIRMĂ\]\s*([^\n]+)\s*$/);
+  if(!m) return {text:content, ask:null};
+  return {text:content.slice(0,m.index).trim(), ask:m[1].trim()};
+}
+function confirmBar(ask){
+  const bar=document.createElement("div");bar.className="confirmbar";
+  const label=document.createElement("span");label.className="clabel";label.textContent=ask;
+  const yes=document.createElement("button");yes.className="cbtn yes";yes.textContent="✓ Da, execută";
+  const no=document.createElement("button");no.className="cbtn no";no.textContent="Nu";
+  yes.onclick=()=>{bar.remove();send("Da — execută exact ce ai propus.");};
+  no.onclick=()=>{bar.remove();send("Nu executa. Anulează acțiunea propusă.");};
+  bar.appendChild(yes);bar.appendChild(no);bar.appendChild(label);
+  return bar;
+}
+
 function sourcesHtml(citations){
   if(!citations) return "";
   const entries=Object.entries(citations);if(!entries.length) return "";
@@ -456,10 +483,12 @@ if(host) host.addEventListener("message",ev=>{
     clearProgress(); setBusy(false);
     if(d.chatId) chatId=d.chatId;
     mergeSrcTypes(d.sourceTypes); // înainte de md(): chip-urile au nevoie de tip
-    let html=md(d.content||"");
+    const cf=stripConfirm(d.content||"");
+    let html=md(cf.text);
     if(reasonBuf || d.thinking) html+=reasonBlock(d.thinking||reasonBuf);
     html+=sourcesHtml(d.citations);
     const el=addMsg("assistant",html);
+    if(cf.ask) el.appendChild(confirmBar(cf.ask));
     if(Array.isArray(d.followUps)&&d.followUps.length){
       const w=document.createElement("div");w.className="fups";
       d.followUps.forEach(q=>{const b=document.createElement("button");b.className="fup";b.textContent=q;b.onclick=()=>send(q);w.appendChild(b);});
@@ -481,7 +510,8 @@ if(host) host.addEventListener("message",ev=>{
     (d.messages||[]).forEach(m=>{
       if(m.role==="user") addMsg("user",esc(m.content||""));
       else{mergeSrcTypes(m.metadata&&m.metadata.sourceTypes);
-        let html=md(m.content||"");
+        // în istoric marcajul [CONFIRMĂ] se afișează ca text simplu, fără butoane
+        let html=md(stripConfirm(m.content||"").text);
         html+=reasonBlock(m.metadata&&m.metadata.thinking);
         html+=sourcesHtml(m.metadata&&m.metadata.citations);addMsg("assistant",html);}
     });scrollDown();
