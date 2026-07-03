@@ -1,65 +1,99 @@
 using System;
 using System.Reflection;
+using System.Text.Json.Nodes;
+using System.Threading.Tasks;
 using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Events;
 using NormalignRevitAgent.Revit;
+using NormalignRevitAgent.Services;
 using NormalignRevitAgent.Ui;
 
 namespace NormalignRevitAgent
 {
     /// <summary>
-    /// Entry point of the add-in. Registered in the .addin manifest as an
-    /// "Application", so OnStartup runs once when Revit launches.
+    /// Punctul de intrare al add-in-ului (înregistrat ca "Application" în .addin,
+    /// deci OnStartup rulează o dată, la pornirea Revit).
     ///
-    /// Responsibilities:
-    ///   1. Build the shared services (WebView2 chat pane + Revit request handler).
-    ///   2. Register the dockable chat pane and the ribbon button.
-    ///   3. Keep the web app's model context in sync with the active document.
+    ///   1. Construiește serviciile partajate (panoul de chat + handler-ul Revit).
+    ///   2. Înregistrează panoul dockable și butonul din ribbon.
+    ///   3. Leagă puntea: chat -> Revit (context/întrebări) și API-ul Normalign.
     /// </summary>
     public class App : IExternalApplication
     {
-        // Stable id for the dockable pane (generated once, keep it constant).
+        // Id stabil pentru panoul dockable (generat o dată, rămâne constant).
         public static readonly DockablePaneId PaneId =
             new DockablePaneId(new Guid("8d07224f-5b91-40ff-931f-ababe3976d28"));
 
-        // The single external event used to run Revit-API work on Revit's thread.
-        // v1 syncs the model summary; v2 will reuse it to run agent tool calls.
         public static ExternalEvent? RevitEvent { get; private set; }
         public static RevitRequestHandler? Handler { get; private set; }
         public static ChatPane? Pane { get; private set; }
 
+        private static readonly NormalignApi Api = new();
+
         public Result OnStartup(UIControlledApplication app)
         {
-            // --- shared services ---
             Handler = new RevitRequestHandler();
             RevitEvent = ExternalEvent.Create(Handler);
             Pane = new ChatPane();
 
-            // Web app mounted inside the pane -> push the current model context.
-            Pane.WebAppReady += () =>
+            // Chat montat -> trimite chip-ul de context (doc · view · selecție).
+            Pane.Ready += () => { Handler.RequestContextSync(); RevitEvent.Raise(); };
+
+            // Întrebare -> pe thread-ul Revit pentru context, apoi HTTP (în handler).
+            Pane.SendRequested += (message, chatId) =>
             {
-                Handler.RequestSync();
+                Handler.EnqueueSend(new ChatSendRequest { Message = message, ChatId = chatId });
                 RevitEvent.Raise();
             };
 
-            // User switched project/view in Revit -> re-sync (deduped by doc title).
-            // ViewActivated runs in a valid API context, so we can read directly.
+            // Istoric + mesaje: doar HTTP, nu ating API-ul Revit — pot pleca direct.
+            Pane.HistoryRequested += () => _ = Task.Run(async () =>
+            {
+                try
+                {
+                    JsonNode chats = await Api.GetHistoryAsync();
+                    Pane!.PostJson(new JsonObject { ["type"] = "history", ["chats"] = chats });
+                }
+                catch (Exception ex)
+                {
+                    Pane!.PostJson(new JsonObject { ["type"] = "error", ["message"] = ex.Message });
+                }
+            });
+
+            Pane.MessagesRequested += chatId => _ = Task.Run(async () =>
+            {
+                try
+                {
+                    JsonNode messages = await Api.GetMessagesAsync(chatId);
+                    Pane!.PostJson(new JsonObject
+                    {
+                        ["type"] = "messages",
+                        ["chatId"] = chatId,
+                        ["messages"] = messages,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Pane!.PostJson(new JsonObject { ["type"] = "error", ["message"] = ex.Message });
+                }
+            });
+
+            // Schimbare de view/document -> chip-ul de context se actualizează.
+            // ViewActivated rulează în context API valid, putem citi direct.
             app.ViewActivated += OnViewActivated;
 
-            // --- dockable pane ---
-            app.RegisterDockablePane(PaneId, "Normalign Agent", new ChatPaneProvider(Pane));
+            // --- panoul dockable ---
+            app.RegisterDockablePane(PaneId, "Normalign", new ChatPaneProvider(Pane));
 
-            // --- ribbon button ---
+            // --- butonul din ribbon ---
             const string tabName = "Normalign";
-            try { app.CreateRibbonTab(tabName); } catch { /* tab may already exist */ }
+            try { app.CreateRibbonTab(tabName); } catch { /* tab-ul poate exista deja */ }
 
             RibbonPanel panel = app.CreateRibbonPanel(tabName, "Agent AI");
-            string asmPath = Assembly.GetExecutingAssembly().Location;
-
             var btn = new PushButtonData(
                 "NormalignChatBtn",
                 "Chat\nNormalign",
-                asmPath,
+                Assembly.GetExecutingAssembly().Location,
                 "NormalignRevitAgent.ShowChatCommand")
             {
                 ToolTip = "Deschide asistentul AI Normalign pentru modelul curent."
@@ -71,8 +105,12 @@ namespace NormalignRevitAgent
 
         private void OnViewActivated(object? sender, ViewActivatedEventArgs e)
         {
-            try { Handler?.SyncFromDoc(e.Document); }
-            catch { /* never let a sync error break view switching */ }
+            try
+            {
+                if (sender is UIApplication uiapp)
+                    Handler?.PushContextChip(uiapp.ActiveUIDocument);
+            }
+            catch { /* sincronizarea nu are voie să strice schimbarea view-ului */ }
         }
 
         public Result OnShutdown(UIControlledApplication app)

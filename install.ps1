@@ -38,6 +38,7 @@ Copy-Item "$repo\bin\NormalignRevitAgent.deps.json" $target -Force -ErrorAction 
 if (Test-Path "$repo\bin\runtimes") {
     Copy-Item "$repo\bin\runtimes" $target -Recurse -Force
 }
+Copy-Item "$repo\bin\Assets" $target -Recurse -Force
 Copy-Item "$repo\NormalignRevitAgent.addin" $addins -Force
 
 # 4. Clean up the obsolete ProgramData copy if a previous install left one.

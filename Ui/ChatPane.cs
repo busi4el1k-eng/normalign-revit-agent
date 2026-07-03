@@ -1,6 +1,9 @@
 using System;
 using System.Diagnostics;
+using System.IO;
+using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -11,69 +14,51 @@ using NormalignRevitAgent.Services;
 namespace NormalignRevitAgent.Ui
 {
     /// <summary>
-    /// The dockable pane: hosts the real Normalign web app in WebView2, so the
-    /// chat inside Revit IS the production chat — same markdown rendering,
-    /// citations, style profiles, history sidebar and Clerk auth as the site.
+    /// Panoul dockable: găzduiește UI-ul de chat propriu (Assets/chat.html —
+    /// stil minimal, ca extensia Claude Code din VS Code) într-un WebView2.
+    /// Nu încarcă niciun site: pagina e servită local prin virtual-host mapping,
+    /// iar apelurile HTTP către backend le face C#-ul (fără CORS, cu cheia API).
     ///
-    /// The only Revit-specific piece is the JS bridge:
-    ///   web  -> host : { type: "normalign-ready" }   (page mounted, wants the model)
-    ///   host -> web  : { type: "revit-model", fileName, summary }
-    /// The web app then attaches the summary to every question as ifcContext —
-    /// the contract the backend already understands.
+    /// Punte JS <-> C#:
+    ///   JS -> C#: { type: "ready" | "send" | "history" | "messages" | "open" }
+    ///   C# -> JS: { type: "context" | "reply" | "history" | "messages" | "error" }
     /// </summary>
     public class ChatPane : UserControl
     {
+        private const string VirtualHost = "app.normalign";
+
         private readonly WebView2 _web = new();
-        private readonly Grid _overlay;      // dark loading / error chrome (Claude-extension style)
-        private readonly TextBlock _overlayTitle;
-        private readonly TextBlock _overlayDetail;
+        private readonly TextBlock _fallback;
 
-        /// <summary>Raised when the web app announced it is mounted and wants the model.</summary>
-        public event Action? WebAppReady;
-
-        private static readonly Brush Bg = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x1e));
-        private static readonly Brush FgDim = new SolidColorBrush(Color.FromRgb(0x9d, 0x9d, 0x9d));
-        private static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(0xd9, 0x77, 0x57));
+        /// <summary>Pagina s-a montat — vrea contextul curent din Revit.</summary>
+        public event Action? Ready;
+        /// <summary>Utilizatorul a trimis o întrebare (mesaj, chatId sau null).</summary>
+        public event Action<string, string?>? SendRequested;
+        /// <summary>UI-ul cere lista de conversații.</summary>
+        public event Action? HistoryRequested;
+        /// <summary>UI-ul cere mesajele unei conversații.</summary>
+        public event Action<string>? MessagesRequested;
 
         public ChatPane()
         {
-            _overlayTitle = new TextBlock
+            _fallback = new TextBlock
             {
-                Text = "Normalign",
-                FontSize = 22,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Accent,
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-            _overlayDetail = new TextBlock
-            {
-                Text = "Se conectează…",
-                FontSize = 12,
-                Foreground = FgDim,
+                Text = "",
+                Foreground = new SolidColorBrush(Color.FromRgb(0x97, 0x93, 0x8c)),
                 TextWrapping = TextWrapping.Wrap,
                 TextAlignment = TextAlignment.Center,
                 MaxWidth = 320,
-                Margin = new Thickness(0, 10, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-
-            var overlayStack = new StackPanel
-            {
                 VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Visibility = Visibility.Collapsed
             };
-            overlayStack.Children.Add(_overlayTitle);
-            overlayStack.Children.Add(_overlayDetail);
 
-            _overlay = new Grid { Background = Bg };
-            _overlay.Children.Add(overlayStack);
-
-            var root = new Grid { Background = Bg };
+            var root = new Grid { Background = new SolidColorBrush(Color.FromRgb(0x1f, 0x1e, 0x1c)) };
             root.Children.Add(_web);
-            root.Children.Add(_overlay);
+            root.Children.Add(_fallback);
             Content = root;
 
-            _web.DefaultBackgroundColor = System.Drawing.Color.FromArgb(0x1e, 0x1e, 0x1e);
+            _web.DefaultBackgroundColor = System.Drawing.Color.FromArgb(0x1f, 0x1e, 0x1c);
             Loaded += async (_, _) => await EnsureInitializedAsync();
         }
 
@@ -95,72 +80,81 @@ namespace NormalignRevitAgent.Ui
                 core.Settings.AreDevToolsEnabled = false;
                 core.Settings.IsStatusBarEnabled = false;
 
-                // Citation PDFs / external links open in the system browser.
-                core.NewWindowRequested += (_, e) =>
-                {
-                    e.Handled = true;
-                    try { Process.Start(new ProcessStartInfo(e.Uri) { UseShellExecute = true }); } catch { }
-                };
+                // Servește Assets/ local — fără rețea, fără site.
+                string assets = Path.Combine(
+                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!, "Assets");
+                core.SetVirtualHostNameToFolderMapping(
+                    VirtualHost, assets, CoreWebView2HostResourceAccessKind.Allow);
 
                 core.WebMessageReceived += OnWebMessage;
-                core.NavigationCompleted += (_, e) =>
-                {
-                    if (e.IsSuccess) HideOverlay();
-                    else ShowError($"Nu am putut încărca {Config.WebUrl} (cod {e.WebErrorStatus}). Verifică conexiunea la internet.");
-                };
-
-                core.Navigate(Config.WebUrl);
+                core.Navigate($"https://{VirtualHost}/chat.html");
             }
             catch (Exception ex)
             {
-                // Most likely: WebView2 Evergreen Runtime missing on this PC.
-                ShowError(
+                _fallback.Text =
                     "Nu am putut porni componenta de browser (WebView2). " +
                     "Instalează \"WebView2 Evergreen Runtime\" de la Microsoft și repornește Revit.\n\n" +
-                    ex.Message);
+                    ex.Message;
+                _fallback.Visibility = Visibility.Visible;
             }
         }
 
         private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
-            try
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(e.TryGetWebMessageAsString()); }
+            catch { return; }
+
+            using (doc)
             {
-                using JsonDocument doc = JsonDocument.Parse(e.TryGetWebMessageAsString());
-                if (doc.RootElement.TryGetProperty("type", out JsonElement t) &&
-                    t.GetString() == "normalign-ready")
+                JsonElement root = doc.RootElement;
+                string? type = root.TryGetProperty("type", out JsonElement t) ? t.GetString() : null;
+
+                switch (type)
                 {
-                    WebAppReady?.Invoke();
+                    case "ready":
+                        Ready?.Invoke();
+                        break;
+
+                    case "send":
+                        string msg = root.TryGetProperty("message", out JsonElement m) ? m.GetString() ?? "" : "";
+                        string? chatId = root.TryGetProperty("chatId", out JsonElement c) &&
+                                         c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+                        if (!string.IsNullOrWhiteSpace(msg)) SendRequested?.Invoke(msg, chatId);
+                        break;
+
+                    case "history":
+                        HistoryRequested?.Invoke();
+                        break;
+
+                    case "messages":
+                        if (root.TryGetProperty("chatId", out JsonElement id) &&
+                            id.ValueKind == JsonValueKind.String)
+                            MessagesRequested?.Invoke(id.GetString()!);
+                        break;
+
+                    case "open":
+                        if (root.TryGetProperty("url", out JsonElement u) &&
+                            u.ValueKind == JsonValueKind.String &&
+                            Uri.TryCreate(u.GetString(), UriKind.Absolute, out Uri? uri) &&
+                            (uri.Scheme == "https" || uri.Scheme == "http"))
+                        {
+                            try { Process.Start(new ProcessStartInfo(uri.ToString()) { UseShellExecute = true }); }
+                            catch { }
+                        }
+                        break;
                 }
             }
-            catch { /* ignore malformed messages */ }
         }
 
         /// <summary>
-        /// Push the live model context into the web app. Safe to call from any
-        /// thread — marshals itself onto the UI thread.
+        /// Trimite un mesaj către UI. Sigur de pe orice thread — se mută singur
+        /// pe thread-ul de UI.
         /// </summary>
-        public void PostModel(string fileName, string summary)
+        public void PostJson(JsonObject message)
         {
-            Dispatcher.BeginInvoke(() =>
-            {
-                CoreWebView2? core = _web.CoreWebView2;
-                if (core == null) return;
-                string json = JsonSerializer.Serialize(new
-                {
-                    type = "revit-model",
-                    fileName,
-                    summary
-                });
-                core.PostWebMessageAsJson(json);
-            });
-        }
-
-        private void HideOverlay() => _overlay.Visibility = Visibility.Collapsed;
-
-        private void ShowError(string message)
-        {
-            _overlay.Visibility = Visibility.Visible;
-            _overlayDetail.Text = message;
+            string json = message.ToJsonString();
+            Dispatcher.BeginInvoke(() => _web.CoreWebView2?.PostWebMessageAsJson(json));
         }
     }
 }

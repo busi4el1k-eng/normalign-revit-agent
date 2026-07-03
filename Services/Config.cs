@@ -5,26 +5,23 @@ using System.Text.Json;
 namespace NormalignRevitAgent.Services
 {
     /// <summary>
-    /// Configuration for the add-in. The pane hosts the real Normalign web app,
-    /// so the only setting that matters is which URL to load.
-    ///
-    /// Override per-machine (e.g. local dev) without rebuilding by creating:
+    /// Configurația add-in-ului. Se citește din:
     ///   %APPDATA%\NormalignRevitAgent\config.json
-    ///   { "webUrl": "http://localhost:3000" }
+    ///   { "webUrl": "https://normalign.com", "apiKey": "nrml_desk_..." }
+    ///
+    /// apiKey = cheia de desktop verificată de backend (src/lib/desktop-auth.ts,
+    /// env DESKTOP_API_KEY) — trimisă ca "Authorization: Bearer ...".
     /// </summary>
     public static class Config
     {
         private const string DefaultWebUrl = "https://normalign.com";
 
-        public static string WebUrl { get; } = Load();
+        public static string WebUrl { get; }
+        public static string ApiKey { get; }
 
-        /// <summary>Browser profile folder — keeps the Clerk login persistent between sessions.</summary>
-        public static string WebViewUserDataFolder =>
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                         "NormalignRevitAgent", "WebView2");
-
-        private static string Load()
+        static Config()
         {
+            string webUrl = DefaultWebUrl, apiKey = "";
             try
             {
                 string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -32,14 +29,22 @@ namespace NormalignRevitAgent.Services
                 if (File.Exists(path))
                 {
                     using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path));
-                    if (doc.RootElement.TryGetProperty("webUrl", out JsonElement url) &&
-                        url.ValueKind == JsonValueKind.String &&
-                        !string.IsNullOrWhiteSpace(url.GetString()))
-                        return url.GetString()!.TrimEnd('/');
+                    if (doc.RootElement.TryGetProperty("webUrl", out JsonElement u) &&
+                        u.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(u.GetString()))
+                        webUrl = u.GetString()!.TrimEnd('/');
+                    if (doc.RootElement.TryGetProperty("apiKey", out JsonElement k) &&
+                        k.ValueKind == JsonValueKind.String)
+                        apiKey = k.GetString()!.Trim();
                 }
             }
-            catch { /* fall back to default on any parse/IO problem */ }
-            return DefaultWebUrl;
+            catch { /* configurație coruptă -> valori implicite */ }
+            WebUrl = webUrl;
+            ApiKey = apiKey;
         }
+
+        /// <summary>Profilul WebView2 (persistă starea browserului între sesiuni).</summary>
+        public static string WebViewUserDataFolder =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                         "NormalignRevitAgent", "WebView2");
     }
 }

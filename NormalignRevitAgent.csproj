@@ -35,9 +35,12 @@
     </Reference>
   </ItemGroup>
 
-  <!-- Copy the manifest next to the DLL after build (handy while developing). -->
+  <!-- Copy the manifest + the chat UI next to the DLL after build. -->
   <ItemGroup>
     <None Update="NormalignRevitAgent.addin">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Assets\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

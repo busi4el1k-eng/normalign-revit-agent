@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Normalign</title>
+<style>
+  /* ── Temă: stil Claude Code extension (dark, cald, minimal) ─────────────── */
+  :root{
+    --bg:#1f1e1c; --surface:#262523; --surface-2:#2b2a27;
+    --border:#3b3936; --border-strong:#4a4744;
+    --text:#e8e6e1; --dim:#97938c; --dimmer:#6e6a63;
+    --accent:#d97757; --accent-hover:#e08663;
+    --code-bg:#191817;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg);color:var(--text);
+    font:13px/1.55 "Segoe UI",system-ui,-apple-system,sans-serif;
+    overflow:hidden;
+  }
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+
+  /* ── Header ──────────────────────────────────────────────────────────────── */
+  header{
+    display:flex;align-items:center;justify-content:space-between;
+    height:38px;padding:0 10px;border-bottom:1px solid var(--border);
+    flex-shrink:0;user-select:none;
+  }
+  #chat-title{font-size:12.5px;font-weight:600;color:var(--dim);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70%}
+  .hbtns{display:flex;gap:2px}
+  .hbtn{
+    width:26px;height:26px;border-radius:6px;display:flex;align-items:center;
+    justify-content:center;color:var(--dim);
+  }
+  .hbtn:hover{background:var(--surface-2);color:var(--text)}
+  .hbtn svg{width:15px;height:15px}
+
+  /* ── Layout ──────────────────────────────────────────────────────────────── */
+  main{display:flex;flex-direction:column;height:100vh}
+  #scroll{flex:1;overflow-y:auto;overscroll-behavior:contain}
+  #messages{max-width:720px;margin:0 auto;padding:16px 16px 8px}
+
+  ::-webkit-scrollbar{width:9px}
+  ::-webkit-scrollbar-thumb{background:#3a3835;border-radius:5px;border:2px solid var(--bg)}
+  ::-webkit-scrollbar-thumb:hover{background:#4a4744}
+
+  /* ── Empty state (ca panoul Claude Code) ─────────────────────────────────── */
+  #empty{
+    position:absolute;inset:38px 0 110px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:14px;pointer-events:none;
+    user-select:none;
+  }
+  #empty .mark{
+    font-family:Georgia,"Times New Roman",serif;font-size:21px;font-weight:600;
+    letter-spacing:.2px;color:var(--text);
+  }
+  #empty .mark .ast{color:var(--accent);margin-right:7px;font-size:19px}
+  #empty .hint{font-size:12.5px;color:var(--dim);max-width:300px;text-align:center}
+
+  /* ── Mesaje ──────────────────────────────────────────────────────────────── */
+  .msg{margin-bottom:18px;animation:fadein .18s ease}
+  @keyframes fadein{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+  .msg.user .body{
+    background:var(--surface-2);border:1px solid var(--border);
+    border-radius:10px;padding:8px 12px;white-space:pre-wrap;
+  }
+  .msg.assistant .body{padding:0 2px}
+
+  /* markdown */
+  .body p{margin:0 0 10px}
+  .body p:last-child{margin-bottom:0}
+  .body h1,.body h2,.body h3,.body h4{margin:14px 0 8px;font-weight:600;line-height:1.3}
+  .body h1{font-size:16px}.body h2{font-size:15px}.body h3{font-size:13.5px}.body h4{font-size:13px}
+  .body ul,.body ol{margin:0 0 10px;padding-left:20px}
+  .body li{margin-bottom:3px}
+  .body code{
+    background:var(--code-bg);border:1px solid var(--border);border-radius:4px;
+    padding:1px 5px;font:12px/1.5 Consolas,"Cascadia Code",monospace;
+  }
+  .body pre{
+    background:var(--code-bg);border:1px solid var(--border);border-radius:8px;
+    padding:10px 12px;overflow-x:auto;margin:0 0 10px;
+  }
+  .body pre code{background:none;border:none;padding:0}
+  .body blockquote{
+    border-left:3px solid var(--border-strong);padding:2px 0 2px 12px;
+    color:var(--dim);margin:0 0 10px;
+  }
+  .body hr{border:none;border-top:1px solid var(--border);margin:12px 0}
+  .body a{color:var(--accent);text-decoration:none}
+  .body a:hover{text-decoration:underline}
+  .body .tbl{overflow-x:auto;margin:0 0 10px}
+  .body table{border-collapse:collapse;font-size:12.5px;min-width:60%}
+  .body th,.body td{border:1px solid var(--border);padding:5px 9px;text-align:left}
+  .body th{background:var(--surface);font-weight:600}
+  .cite{
+    display:inline-block;background:var(--surface);border:1px solid var(--border);
+    border-radius:5px;padding:0 6px;font-size:11px;color:var(--accent);
+    white-space:nowrap;vertical-align:baseline;
+  }
+
+  /* surse + follow-ups */
+  .sources{margin-top:6px;font-size:11.5px;color:var(--dimmer)}
+  .sources b{color:var(--dim);font-weight:600}
+  .fups{display:flex;flex-direction:column;gap:5px;margin-top:10px}
+  .fup{
+    text-align:left;font-size:12px;color:var(--dim);
+    border:1px solid var(--border);border-radius:8px;padding:6px 10px;
+  }
+  .fup:hover{border-color:var(--border-strong);color:var(--text);background:var(--surface)}
+
+  /* thinking dots */
+  .dots{display:inline-flex;gap:4px;padding:4px 0}
+  .dots i{width:5px;height:5px;border-radius:50%;background:var(--dim);animation:blink 1.2s infinite}
+  .dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
+  @keyframes blink{0%,60%,100%{opacity:.25}30%{opacity:1}}
+
+  /* ── Input (caseta rotunjită jos, ca la Claude Code) ─────────────────────── */
+  #inputwrap{flex-shrink:0;padding:10px 12px 12px;max-width:744px;margin:0 auto;width:100%}
+  #inputbox{
+    border:1px solid var(--border-strong);border-radius:14px;background:var(--surface);
+    transition:border-color .15s;
+  }
+  #inputbox:focus-within{border-color:#5a5651}
+  #input{
+    width:100%;background:none;border:none;outline:none;resize:none;
+    color:var(--text);font:inherit;padding:10px 12px 4px;max-height:140px;
+  }
+  #input::placeholder{color:var(--dimmer)}
+  #inputrow{display:flex;align-items:center;justify-content:space-between;padding:4px 6px 6px 10px}
+  #ctx{
+    display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim);
+    min-width:0;overflow:hidden;
+  }
+  #ctx svg{width:12px;height:12px;flex-shrink:0;color:var(--dimmer)}
+  #ctx .dot{width:6px;height:6px;border-radius:50%;background:#4cc38a;flex-shrink:0}
+  #ctx span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #send{
+    width:28px;height:28px;border-radius:8px;background:var(--surface-2);
+    color:var(--dimmer);display:flex;align-items:center;justify-content:center;
+    flex-shrink:0;transition:all .15s;
+  }
+  #send.on{background:var(--accent);color:#fff}
+  #send.on:hover{background:var(--accent-hover)}
+  #send svg{width:15px;height:15px}
+
+  /* ── Drawer istoric ──────────────────────────────────────────────────────── */
+  #histwrap{
+    position:absolute;inset:0;background:rgba(0,0,0,.45);display:none;z-index:20;
+  }
+  #hist{
+    position:absolute;top:44px;right:10px;width:min(320px,85vw);max-height:60vh;
+    overflow-y:auto;background:var(--surface);border:1px solid var(--border-strong);
+    border-radius:12px;padding:6px;box-shadow:0 10px 32px rgba(0,0,0,.5);
+  }
+  #hist .hd{font-size:11px;font-weight:600;color:var(--dimmer);padding:6px 10px 4px;
+    text-transform:uppercase;letter-spacing:.4px}
+  .hitem{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:8px;font-size:12.5px}
+  .hitem:hover{background:var(--surface-2)}
+  .hitem .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hitem .d{font-size:10.5px;color:var(--dimmer);margin-top:1px}
+  .hempty{padding:12px 10px;font-size:12px;color:var(--dimmer)}
+
+  /* ── Banner eroare ───────────────────────────────────────────────────────── */
+  #err{
+    display:none;margin:0 16px 8px;max-width:712px;
+    border:1px solid #7a3b2e;background:#33221d;color:#e8a184;
+    border-radius:10px;padding:8px 12px;font-size:12px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div id="chat-title">Conversație nouă</div>
+    <div class="hbtns">
+      <button class="hbtn" id="btn-hist" title="Istoric conversații">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      </button>
+      <button class="hbtn" id="btn-new" title="Conversație nouă">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="scroll">
+    <div id="messages"></div>
+  </div>
+
+  <div id="empty">
+    <div class="mark"><span class="ast">✳</span>Normalign</div>
+    <div class="hint">Întreabă despre normative românești sau despre modelul Revit deschis.</div>
+  </div>
+
+  <div id="err"></div>
+
+  <div id="inputwrap">
+    <div id="inputbox">
+      <textarea id="input" rows="1" placeholder="Întreabă Normalign…"></textarea>
+      <div id="inputrow">
+        <div id="ctx">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
+          <span id="ctx-text">Se conectează la Revit…</span>
+        </div>
+        <button id="send" title="Trimite">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="histwrap">
+  <div id="hist">
+    <div class="hd">Conversații</div>
+    <div id="histlist"><div class="hempty">Se încarcă…</div></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ════════════════════════════════════════════════════════════════════════════
+// Punte C# <-> JS.  Spre gazdă:  {type:"ready"|"send"|"history"|"messages",...}
+// De la gazdă:  {type:"context"|"reply"|"history"|"messages"|"error",...}
+// ════════════════════════════════════════════════════════════════════════════
+const host = window.chrome && window.chrome.webview;
+const $ = id => document.getElementById(id);
+
+let chatId = null;
+let busy = false;
+
+// ── Markdown (renderer compact: titluri, liste, cod, tabele, citate SURSĂ) ──
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+function inline(s){
+  s = s.replace(/\[SURSĂ \d+\s*\|\s*([^|\]]+?)\s*\|\s*pag\.\s*(\d+)\]/g,
+      '<span class="cite">$1 · p.$2</span>');
+  s = s.replace(/`([^`]+)`/g, (m,c)=>"<code>"+c+"</code>");
+  s = s.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");
+  s = s.replace(/(^|[^*\w])\*([^*\s][^*]*)\*/g,"$1<em>$2</em>");
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2">$1</a>');
+  return s;
+}
+function md(src){
+  const lines = esc(src.replace(/\r\n/g,"\n")).split("\n");
+  const out = []; let i = 0;
+  while(i < lines.length){
+    const l = lines[i];
+    if(/^```/.test(l)){ const buf=[]; i++;
+      while(i<lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out.push("<pre><code>"+buf.join("\n")+"</code></pre>"); continue; }
+    if(/^#{1,4} /.test(l)){ const n=l.match(/^#+/)[0].length;
+      out.push(`<h${n}>`+inline(l.replace(/^#+ /,""))+`</h${n}>`); i++; continue; }
+    if(/^\s*[-*] /.test(l)){ const buf=[];
+      while(i<lines.length && /^\s*[-*] /.test(lines[i]))
+        buf.push("<li>"+inline(lines[i++].replace(/^\s*[-*] /,""))+"</li>");
+      out.push("<ul>"+buf.join("")+"</ul>"); continue; }
+    if(/^\s*\d+[.)] /.test(l)){ const buf=[];
+      while(i<lines.length && /^\s*\d+[.)] /.test(lines[i]))
+        buf.push("<li>"+inline(lines[i++].replace(/^\s*\d+[.)] /,""))+"</li>");
+      out.push("<ol>"+buf.join("")+"</ol>"); continue; }
+    if(/^>/.test(l)){ const buf=[];
+      while(i<lines.length && /^>/.test(lines[i]))
+        buf.push(inline(lines[i++].replace(/^>\s?/,"")));
+      out.push("<blockquote>"+buf.join("<br>")+"</blockquote>"); continue; }
+    if(/^\s*(---+|\*\*\*+)\s*$/.test(l)){ out.push("<hr>"); i++; continue; }
+    if(/^\|.*\|\s*$/.test(l) && i+1<lines.length && /^\|[\s:|-]+\|\s*$/.test(lines[i+1])){
+      const cells = r => r.trim().replace(/^\||\|$/g,"").split("|");
+      const head = cells(l).map(c=>"<th>"+inline(c.trim())+"</th>").join("");
+      i += 2; const rows=[];
+      while(i<lines.length && /^\|.*\|\s*$/.test(lines[i]))
+        rows.push("<tr>"+cells(lines[i++]).map(c=>"<td>"+inline(c.trim())+"</td>").join("")+"</tr>");
+      out.push('<div class="tbl"><table><thead><tr>'+head+"</tr></thead><tbody>"+rows.join("")+"</tbody></table></div>");
+      continue; }
+    if(l.trim()===""){ i++; continue; }
+    const buf=[l]; i++;
+    while(i<lines.length && lines[i].trim()!=="" &&
+          !/^(#{1,4} |```|\s*[-*] |\s*\d+[.)] |>|\|.*\|\s*$|\s*---+\s*$)/.test(lines[i]))
+      buf.push(lines[i++]);
+    out.push("<p>"+inline(buf.join(" "))+"</p>");
+  }
+  return out.join("");
+}
+
+// ── UI helpers ───────────────────────────────────────────────────────────────
+function addMsg(role, html){
+  $("empty").style.display = "none";
+  const div = document.createElement("div");
+  div.className = "msg "+role;
+  div.innerHTML = '<div class="body">'+html+"</div>";
+  $("messages").appendChild(div);
+  scrollDown();
+  return div;
+}
+function scrollDown(){ const s=$("scroll"); s.scrollTop = s.scrollHeight; }
+function showError(text){
+  const e = $("err"); e.textContent = text; e.style.display = "block";
+  setTimeout(()=>{ e.style.display = "none"; }, 8000);
+}
+function setBusy(b){
+  busy = b;
+  updateSend();
+}
+function updateSend(){
+  const has = $("input").value.trim().length > 0;
+  $("send").classList.toggle("on", has && !busy);
+}
+function sourcesHtml(citations){
+  if(!citations) return "";
+  const parts = Object.entries(citations).map(([doc,pages])=>
+    esc(doc)+" (pag. "+pages.join(", ")+")");
+  if(!parts.length) return "";
+  return '<div class="sources"><b>Surse:</b> '+parts.join(" · ")+"</div>";
+}
+
+let thinkingEl = null;
+function showThinking(){
+  thinkingEl = addMsg("assistant",'<span class="dots"><i></i><i></i><i></i></span>');
+}
+function clearThinking(){
+  if(thinkingEl){ thinkingEl.remove(); thinkingEl = null; }
+}
+
+// ── Trimitere ────────────────────────────────────────────────────────────────
+function send(text){
+  const msg = (text !== undefined ? text : $("input").value).trim();
+  if(!msg || busy || !host) return;
+  $("input").value = ""; autoGrow(); updateSend();
+  addMsg("user", esc(msg));
+  setBusy(true);
+  showThinking();
+  host.postMessage(JSON.stringify({type:"send", message:msg, chatId:chatId}));
+}
+
+// ── Mesaje de la gazdă (C#) ──────────────────────────────────────────────────
+if(host) host.addEventListener("message", ev => {
+  let d = ev.data;
+  if(typeof d === "string"){ try{ d = JSON.parse(d); }catch{ return; } }
+  if(!d || !d.type) return;
+
+  if(d.type === "context"){
+    const parts = [d.file || "Fără model"];
+    if(d.view) parts.push(d.view);
+    let t = parts.join(" · ");
+    if(d.selection > 0) t += " · "+d.selection+" selectate";
+    $("ctx-text").textContent = t;
+    if(!document.querySelector("#ctx .dot")){
+      const dot = document.createElement("span");
+      dot.className = "dot";
+      $("ctx").insertBefore(dot, $("ctx").firstChild);
+    }
+  }
+  else if(d.type === "reply"){
+    clearThinking(); setBusy(false);
+    if(d.chatId) chatId = d.chatId;
+    let html = md(d.content || "");
+    html += sourcesHtml(d.citations);
+    const el = addMsg("assistant", html);
+    if(Array.isArray(d.followUps) && d.followUps.length){
+      const w = document.createElement("div"); w.className = "fups";
+      d.followUps.forEach(q=>{
+        const b = document.createElement("button");
+        b.className = "fup"; b.textContent = q;
+        b.onclick = ()=>send(q);
+        w.appendChild(b);
+      });
+      el.appendChild(w);
+    }
+    scrollDown();
+  }
+  else if(d.type === "history"){
+    const list = $("histlist"); list.innerHTML = "";
+    const chats = d.chats || [];
+    if(!chats.length){ list.innerHTML = '<div class="hempty">Nicio conversație încă.</div>'; return; }
+    chats.forEach(c=>{
+      const b = document.createElement("button");
+      b.className = "hitem";
+      const when = c.createdAt ? new Date(c.createdAt).toLocaleDateString("ro-RO",
+        {day:"numeric",month:"short",year:"numeric"}) : "";
+      b.innerHTML = '<div class="t">'+esc(c.title || "Conversație")+'</div><div class="d">'+when+"</div>";
+      b.onclick = ()=>{ closeHist(); openChat(c.id, c.title); };
+      list.appendChild(b);
+    });
+  }
+  else if(d.type === "messages"){
+    $("messages").innerHTML = "";
+    chatId = d.chatId;
+    (d.messages || []).forEach(m=>{
+      if(m.role === "user") addMsg("user", esc(m.content||""));
+      else {
+        let html = md(m.content||"");
+        html += sourcesHtml(m.metadata && m.metadata.citations);
+        addMsg("assistant", html);
+      }
+    });
+    scrollDown();
+  }
+  else if(d.type === "error"){
+    clearThinking(); setBusy(false);
+    showError(d.message || "Eroare necunoscută.");
+  }
+});
+
+function openChat(id, title){
+  $("chat-title").textContent = title || "Conversație";
+  if(host) host.postMessage(JSON.stringify({type:"messages", chatId:id}));
+}
+function newChat(){
+  chatId = null;
+  $("chat-title").textContent = "Conversație nouă";
+  $("messages").innerHTML = "";
+  $("empty").style.display = "flex";
+  $("input").focus();
+}
+
+// ── Istoric ──────────────────────────────────────────────────────────────────
+function openHist(){
+  $("histwrap").style.display = "block";
+  $("histlist").innerHTML = '<div class="hempty">Se încarcă…</div>';
+  if(host) host.postMessage(JSON.stringify({type:"history"}));
+}
+function closeHist(){ $("histwrap").style.display = "none"; }
+$("btn-hist").onclick = openHist;
+$("btn-new").onclick = newChat;
+$("histwrap").onclick = e => { if(e.target === $("histwrap")) closeHist(); };
+document.addEventListener("keydown", e => { if(e.key === "Escape") closeHist(); });
+
+// ── Input ────────────────────────────────────────────────────────────────────
+const input = $("input");
+function autoGrow(){ input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 140)+"px"; }
+input.addEventListener("input", ()=>{ autoGrow(); updateSend(); });
+input.addEventListener("keydown", e => {
+  if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(); }
+});
+$("send").onclick = ()=>send();
+
+// linkuri externe -> browserul de sistem (gazda le interceptează)
+document.addEventListener("click", e => {
+  const a = e.target.closest("a");
+  if(a && /^https?:/.test(a.href)){ e.preventDefault();
+    if(host) host.postMessage(JSON.stringify({type:"open", url:a.href})); }
+});
+
+// gata — cerem contextul curent din Revit
+if(host) host.postMessage(JSON.stringify({type:"ready"}));
+input.focus();
+</script>
+</body>
+</html>
