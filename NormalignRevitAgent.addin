@@ -2,8 +2,9 @@
 <RevitAddIns>
   <AddIn Type="Application">
     <Name>Normalign Agent</Name>
-    <!-- Point this at your built DLL. Debug/x64 default output path below. -->
-    <Assembly>C:\Users\nichi\source\repos\NormalignRevitAgent\bin\NormalignRevitAgent.dll</Assembly>
+    <!-- Relative path: the DLL is deployed into a subfolder next to this manifest
+         by install.ps1, so the same manifest works on any PC / any user. -->
+    <Assembly>NormalignRevitAgent\NormalignRevitAgent.dll</Assembly>
     <FullClassName>NormalignRevitAgent.App</FullClassName>
     <ClientId>cd465744-7174-4044-b4e2-69ea01c2a14a</ClientId>
     <VendorId>NRML</VendorId>

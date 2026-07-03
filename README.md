@@ -15,13 +15,23 @@ dotnet build NormalignRevitAgent.csproj -c Debug
 ```
 Output: `bin\NormalignRevitAgent.dll` (+ `bin\NormalignRevitAgent.addin`).
 
-## Install into Revit
-Copy the manifest so Revit loads the add-in on startup:
+## Install into Revit (any PC, no admin needed)
+Run the installer from the repo folder (or just double-click `install.bat`):
 ```
-copy NormalignRevitAgent.addin  "C:\ProgramData\Autodesk\Revit\Addins\2027\"
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
-(The manifest's `<Assembly>` already points at `bin\NormalignRevitAgent.dll`.)
-Then launch Revit → ribbon tab **Normalign** → **Chat Normalign** to open the panel.
+It builds the project and deploys to the **per-user** add-ins folder:
+```
+%APPDATA%\Autodesk\Revit\Addins\2027\NormalignRevitAgent.addin
+%APPDATA%\Autodesk\Revit\Addins\2027\NormalignRevitAgent\NormalignRevitAgent.dll
+```
+> Note: Revit 2027 rejects the legacy `C:\ProgramData\...\Addins` location — all-users
+> installs must go to `C:\Program Files\Autodesk\Revit\Addins\2027` (admin). The
+> per-user folder above needs no admin and is what the script uses. The manifest's
+> `<Assembly>` path is relative, so nothing is machine-specific.
+
+Then restart Revit, accept the **unsigned add-in** dialog with **Always Load**, and open
+ribbon tab **Normalign** → **Chat Normalign**.
 
 ## Configure the backend (Services/Config.cs)
 `/api/chat` is Clerk-protected, so pick one:
