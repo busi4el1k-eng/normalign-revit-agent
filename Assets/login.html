@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ro" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Normalign — Autentificare</title>
+<style>
+  :root{ --background:oklch(0.99 0.008 80); --foreground:oklch(0.10 0.02 260);
+    --card:oklch(1 0 0); --primary:oklch(0.18 0.05 260); --primary-foreground:oklch(0.98 0.01 260);
+    --border:oklch(0.84 0.018 78); --muted-foreground:oklch(0.38 0.030 260); }
+  :root[data-theme="dark"]{ --background:oklch(0.16 0.012 255); --foreground:oklch(0.85 0.01 260);
+    --card:oklch(0.21 0.016 255); --primary:oklch(0.85 0.01 260); --primary-foreground:oklch(0.14 0.02 260);
+    --border:oklch(0.24 0.025 250); --muted-foreground:oklch(0.56 0.022 260); }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--background);color:var(--foreground);
+    font:13px/1.5 "Segoe UI",system-ui,sans-serif;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:24px;text-align:center}
+  .mark{font-family:Georgia,serif;font-size:26px;font-weight:600}
+  .mark .ast{color:var(--primary);margin-right:8px}
+  .sub{font-size:13px;color:var(--muted-foreground);max-width:300px;line-height:1.6}
+  button{font:inherit;cursor:pointer;border:none}
+  #login{background:var(--primary);color:var(--primary-foreground);
+    border-radius:10px;padding:10px 20px;font-size:13.5px;font-weight:600;
+    display:inline-flex;align-items:center;gap:8px;transition:opacity .15s}
+  #login:hover{opacity:.9}
+  #login:disabled{opacity:.55;cursor:default}
+  #login svg{width:16px;height:16px}
+  .status{font-size:12px;color:var(--muted-foreground);min-height:18px}
+  .spin{width:14px;height:14px;border:2px solid color-mix(in oklch,var(--primary-foreground) 40%,transparent);
+    border-top-color:var(--primary-foreground);border-radius:50%;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+  <div class="mark"><span class="ast">✳</span>Normalign</div>
+  <div class="sub">Asistent AI pentru normative românești, integrat în Revit. Conectează-te la contul tău pentru a începe.</div>
+  <button id="login">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+    <span id="login-label">Conectează-te</span>
+  </button>
+  <div class="status" id="status"></div>
+
+<script>
+"use strict";
+const host = window.chrome && window.chrome.webview;
+const $ = id => document.getElementById(id);
+let waiting = false;
+
+function setWaiting(on){
+  waiting = on;
+  $("login").disabled = on;
+  $("login-label").textContent = on ? "Se așteaptă browserul…" : "Conectează-te";
+  const ic = $("login").querySelector("svg");
+  if(on){ ic.outerHTML = '<span class="spin" id="lspin"></span>'; }
+  $("status").textContent = on ? "Am deschis pagina de login în browser. Autentifică-te acolo, apoi revii automat." : "";
+}
+
+$("login").onclick = ()=>{ if(waiting||!host) return; setWaiting(true); host.postMessage(JSON.stringify({type:"login"})); };
+
+if(host) host.addEventListener("message", ev=>{
+  let d=ev.data; if(typeof d==="string"){try{d=JSON.parse(d)}catch{return}}
+  if(!d||!d.type) return;
+  if(d.type==="theme"||d.type==="context"){ if(d.theme) document.documentElement.dataset.theme=(d.theme==="light"?"light":"dark"); }
+  else if(d.type==="login-failed"){ setWaiting(false); $("status").textContent = d.message || "Autentificarea nu a reușit. Reîncearcă.";
+    $("login").innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg><span id="login-label">Conectează-te</span>'; }
+});
+
+if(host) host.postMessage(JSON.stringify({type:"login-ready"}));
+</script>
+</body>
+</html>

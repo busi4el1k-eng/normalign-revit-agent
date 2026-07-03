@@ -15,14 +15,15 @@ namespace NormalignRevitAgent.Services
     /// </summary>
     public class NormalignApi
     {
-        private static readonly HttpClient Http = CreateClient();
+        // Timeout infinit: fluxul deep-think poate dura minute. Token-ul se pune
+        // per-cerere (se schimbă la login/logout), deci nu ca header implicit.
+        private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
-        private static HttpClient CreateClient()
+        private static void Authorize(HttpRequestMessage req)
         {
-            var c = new HttpClient { Timeout = Timeout.InfiniteTimeSpan }; // stream deep-think poate dura
-            if (!string.IsNullOrEmpty(Config.ApiKey))
-                c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Config.ApiKey);
-            return c;
+            string? token = AuthStore.Token;
+            if (!string.IsNullOrEmpty(token))
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
 
         /// <summary>
@@ -45,6 +46,7 @@ namespace NormalignRevitAgent.Services
             {
                 Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
             };
+            Authorize(req);
 
             using HttpResponseMessage resp = await Http.SendAsync(
                 req, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -111,14 +113,18 @@ namespace NormalignRevitAgent.Services
 
         public async Task<JsonNode> GetHistoryAsync()
         {
-            using HttpResponseMessage resp = await Http.GetAsync($"{Config.WebUrl}/api/history");
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{Config.WebUrl}/api/history");
+            Authorize(req);
+            using HttpResponseMessage resp = await Http.SendAsync(req);
             return await ParseAsync(resp);
         }
 
         public async Task<JsonNode> GetMessagesAsync(string chatId)
         {
-            using HttpResponseMessage resp = await Http.GetAsync(
+            using var req = new HttpRequestMessage(HttpMethod.Get,
                 $"{Config.WebUrl}/api/messages?chatId={Uri.EscapeDataString(chatId)}");
+            Authorize(req);
+            using HttpResponseMessage resp = await Http.SendAsync(req);
             return await ParseAsync(resp);
         }
 

@@ -183,6 +183,9 @@
       <button class="hbtn" id="btn-new" title="Conversație nouă">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
       </button>
+      <button class="hbtn" id="btn-logout" title="Deconectare">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+      </button>
     </div>
   </header>
 
@@ -423,6 +426,7 @@ document.addEventListener("click",e=>{
 function openHist(){$("histwrap").style.display="block";$("histlist").innerHTML='<div class="hempty">Se încarcă…</div>';if(host)host.postMessage(JSON.stringify({type:"history"}));}
 function closeHist(){$("histwrap").style.display="none";}
 $("btn-hist").onclick=openHist;$("btn-new").onclick=newChat;
+$("btn-logout").onclick=()=>{ if(host&&confirm("Te deconectezi din Normalign?")) host.postMessage(JSON.stringify({type:"logout"})); };
 $("histwrap").onclick=e=>{if(e.target===$("histwrap"))closeHist();};
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){if($("pdfview").classList.contains("show"))closePdf();else closeHist();}});
 

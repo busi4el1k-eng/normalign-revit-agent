@@ -1,6 +1,7 @@
 using System;
 using System.Reflection;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Events;
@@ -48,6 +49,21 @@ namespace NormalignRevitAgent
 
             // Stop -> anulează răspunsul în curs.
             Pane.StopRequested += () => Handler.CancelCurrent();
+
+            // Login (browser loopback) -> la succes, comută pe chat.
+            Pane.LoginRequested += () => _ = Task.Run(async () =>
+            {
+                try
+                {
+                    string? token = await LoginServer.RunAsync(CancellationToken.None);
+                    if (!string.IsNullOrEmpty(token)) Pane!.ShowChat();
+                    else Pane!.LoginFailed("Autentificarea nu s-a finalizat. Reîncearcă.");
+                }
+                catch (Exception ex) { Pane!.LoginFailed(ex.Message); }
+            });
+
+            // Logout -> șterge token-ul și revino la ecranul de login.
+            Pane.LogoutRequested += () => { AuthStore.Clear(); Pane!.ShowLogin(); };
 
             // Istoric + mesaje: doar HTTP, nu ating API-ul Revit — pot pleca direct.
             Pane.HistoryRequested += () => _ = Task.Run(async () =>
