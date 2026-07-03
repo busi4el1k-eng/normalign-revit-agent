@@ -1,8 +1,10 @@
 using System;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace NormalignRevitAgent.Services
@@ -10,10 +12,6 @@ namespace NormalignRevitAgent.Services
     /// <summary>
     /// Client HTTP pentru backend-ul Normalign. Autentificare prin cheia de
     /// desktop (Bearer) — vezi src/lib/desktop-auth.ts în aplicația web.
-    ///
-    /// POST /api/chat      -> răspuns { content, chatId, followUpQuestions, metadata.citations }
-    /// GET  /api/history   -> [{ id, title, createdAt }]
-    /// GET  /api/messages  -> [{ role, content, metadata }]
     /// </summary>
     public class NormalignApi
     {
@@ -21,31 +19,95 @@ namespace NormalignRevitAgent.Services
 
         private static HttpClient CreateClient()
         {
-            var c = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
+            var c = new HttpClient { Timeout = Timeout.InfiniteTimeSpan }; // stream deep-think poate dura
             if (!string.IsNullOrEmpty(Config.ApiKey))
-                c.DefaultRequestHeaders.Authorization =
-                    new AuthenticationHeaderValue("Bearer", Config.ApiKey);
+                c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Config.ApiKey);
             return c;
         }
 
-        /// <summary>Trimite o întrebare + contextul live din Revit (ca ifcContext).</summary>
-        public async Task<JsonNode> SendChatAsync(string message, string? chatId, string fileName, string context)
+        /// <summary>
+        /// Trimite o întrebare cu contextul live din Revit. Mod standard = un
+        /// singur răspuns JSON; mod aprofundat = flux SSE (stage/thinking/done).
+        /// <paramref name="emit"/> primește mesajele deja formatate pentru UI.
+        /// </summary>
+        public async Task SendChatAsync(string message, string? chatId, string fileName, string context,
+            bool deepThink, Action<JsonObject> emit, CancellationToken ct)
         {
             var body = new JsonObject
             {
                 ["message"] = message,
                 ["chatId"] = chatId,
-                ["deepThink"] = false,
-                ["ifcContext"] = new JsonObject
-                {
-                    ["fileName"] = fileName,
-                    ["summary"] = context
-                }
+                ["deepThink"] = deepThink,
+                ["ifcContext"] = new JsonObject { ["fileName"] = fileName, ["summary"] = context }
             };
-            using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
-            using HttpResponseMessage resp = await Http.PostAsync($"{Config.WebUrl}/api/chat", content);
-            return await ParseAsync(resp);
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{Config.WebUrl}/api/chat")
+            {
+                Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+
+            using HttpResponseMessage resp = await Http.SendAsync(
+                req, HttpCompletionOption.ResponseHeadersRead, ct);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                string err = await SafeRead(resp);
+                string hint = (int)resp.StatusCode == 401
+                    ? " Verifică apiKey din config.json și DESKTOP_API_KEY pe server." : "";
+                throw new Exception($"Server {(int)resp.StatusCode}.{hint} {err}".Trim());
+            }
+
+            if (deepThink)
+                await ReadSseAsync(resp, emit, ct);
+            else
+            {
+                JsonNode data = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct)) ?? new JsonObject();
+                emit(BuildReply(data));
+            }
         }
+
+        // ── SSE: data: {"type":"stage"|"thinking"|"done"|"error", ...}\n\n ──────
+        private static async Task ReadSseAsync(HttpResponseMessage resp, Action<JsonObject> emit, CancellationToken ct)
+        {
+            using Stream stream = await resp.Content.ReadAsStreamAsync(ct);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct)) != null)
+            {
+                if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
+
+                JsonNode? ev;
+                try { ev = JsonNode.Parse(line.Substring(6)); } catch { continue; }
+                if (ev == null) continue;
+
+                switch (ev["type"]?.GetValue<string>())
+                {
+                    case "stage":
+                        emit(new JsonObject { ["type"] = "stage", ["label"] = ev["label"]?.GetValue<string>() ?? "" });
+                        break;
+                    case "thinking":
+                        emit(new JsonObject { ["type"] = "thinking", ["delta"] = ev["delta"]?.GetValue<string>() ?? "" });
+                        break;
+                    case "done":
+                        if (ev["payload"] is JsonObject payload)
+                            emit(BuildReply(payload));
+                        return;
+                    case "error":
+                        throw new Exception(ev["error"]?.GetValue<string>() ?? "Eroare internă la analiză.");
+                }
+            }
+        }
+
+        private static JsonObject BuildReply(JsonNode data) => new JsonObject
+        {
+            ["type"] = "reply",
+            ["content"] = data["content"]?.GetValue<string>() ?? "",
+            ["chatId"] = data["chatId"]?.DeepClone(),
+            ["followUps"] = data["followUpQuestions"]?.DeepClone(),
+            ["citations"] = data["metadata"]?["citations"]?.DeepClone(),
+            ["thinking"] = data["metadata"]?["thinking"]?.DeepClone(),
+        };
 
         public async Task<JsonNode> GetHistoryAsync()
         {
@@ -66,11 +128,20 @@ namespace NormalignRevitAgent.Services
             if (!resp.IsSuccessStatusCode)
             {
                 string hint = (int)resp.StatusCode == 401
-                    ? " Verifică apiKey din %APPDATA%\\NormalignRevitAgent\\config.json și DESKTOP_API_KEY pe server."
-                    : "";
+                    ? " Verifică apiKey din config.json și DESKTOP_API_KEY pe server." : "";
                 throw new Exception($"Server {(int)resp.StatusCode}.{hint}");
             }
             return JsonNode.Parse(json) ?? new JsonObject();
+        }
+
+        private static async Task<string> SafeRead(HttpResponseMessage resp)
+        {
+            try
+            {
+                string s = await resp.Content.ReadAsStringAsync();
+                return s.Length <= 200 ? s : s.Substring(0, 200);
+            }
+            catch { return ""; }
         }
     }
 }

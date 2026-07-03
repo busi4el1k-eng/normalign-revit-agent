@@ -32,8 +32,10 @@ namespace NormalignRevitAgent.Ui
 
         /// <summary>Pagina s-a montat — vrea contextul curent din Revit.</summary>
         public event Action? Ready;
-        /// <summary>Utilizatorul a trimis o întrebare (mesaj, chatId sau null).</summary>
-        public event Action<string, string?>? SendRequested;
+        /// <summary>Utilizatorul a trimis o întrebare (mesaj, chatId, mod aprofundat).</summary>
+        public event Action<string, string?, bool>? SendRequested;
+        /// <summary>Utilizatorul a apăsat Stop.</summary>
+        public event Action? StopRequested;
         /// <summary>UI-ul cere lista de conversații.</summary>
         public event Action? HistoryRequested;
         /// <summary>UI-ul cere mesajele unei conversații.</summary>
@@ -120,7 +122,13 @@ namespace NormalignRevitAgent.Ui
                         string msg = root.TryGetProperty("message", out JsonElement m) ? m.GetString() ?? "" : "";
                         string? chatId = root.TryGetProperty("chatId", out JsonElement c) &&
                                          c.ValueKind == JsonValueKind.String ? c.GetString() : null;
-                        if (!string.IsNullOrWhiteSpace(msg)) SendRequested?.Invoke(msg, chatId);
+                        bool deep = root.TryGetProperty("deepThink", out JsonElement dt) &&
+                                    dt.ValueKind == JsonValueKind.True;
+                        if (!string.IsNullOrWhiteSpace(msg)) SendRequested?.Invoke(msg, chatId, deep);
+                        break;
+
+                    case "stop":
+                        StopRequested?.Invoke();
                         break;
 
                     case "history":

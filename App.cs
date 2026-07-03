@@ -40,11 +40,14 @@ namespace NormalignRevitAgent
             Pane.Ready += () => { Handler.RequestContextSync(); RevitEvent.Raise(); };
 
             // Întrebare -> pe thread-ul Revit pentru context, apoi HTTP (în handler).
-            Pane.SendRequested += (message, chatId) =>
+            Pane.SendRequested += (message, chatId, deepThink) =>
             {
-                Handler.EnqueueSend(new ChatSendRequest { Message = message, ChatId = chatId });
+                Handler.EnqueueSend(new ChatSendRequest { Message = message, ChatId = chatId, DeepThink = deepThink });
                 RevitEvent.Raise();
             };
+
+            // Stop -> anulează răspunsul în curs.
+            Pane.StopRequested += () => Handler.CancelCurrent();
 
             // Istoric + mesaje: doar HTTP, nu ating API-ul Revit — pot pleca direct.
             Pane.HistoryRequested += () => _ = Task.Run(async () =>

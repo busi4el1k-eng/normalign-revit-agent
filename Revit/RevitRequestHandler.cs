@@ -18,19 +18,14 @@ namespace NormalignRevitAgent.Revit
     {
         public string Message = "";
         public string? ChatId;
+        public bool DeepThink;
     }
 
     /// <summary>
-    /// Puntea de thread-uri dintre chat și API-ul Revit.
-    ///
-    /// API-ul Revit e legal doar pe thread-ul Revit, într-un context ridicat de
-    /// Revit. Mesajele din WebView2 sosesc pe thread-ul de UI, deci punem cererea
-    /// în coadă și facem Raise() pe ExternalEvent; Revit apelează Execute() unde
-    /// citim documentul (model, view activ, selecție). HTTP-ul pleacă apoi pe
-    /// thread pool ca să nu blocheze Revit.
-    ///
-    /// v2 (agentic): tot aici se vor executa tool-urile cerute de LLM
-    /// (query_elements, tag_element, ...) prin ToolRegistry — plumbing identic.
+    /// Puntea de thread-uri dintre chat și API-ul Revit. API-ul Revit e legal doar
+    /// pe thread-ul Revit; punem cererea în coadă, Raise() pe ExternalEvent, iar
+    /// Revit apelează Execute() unde citim documentul (model, view activ, selecție).
+    /// HTTP-ul pleacă apoi pe thread pool, anulabil prin CancellationTokenSource.
     /// </summary>
     public class RevitRequestHandler : IExternalEventHandler
     {
@@ -38,13 +33,19 @@ namespace NormalignRevitAgent.Revit
         private readonly NormalignApi _api = new();
         private readonly ConcurrentQueue<ChatSendRequest> _sendQueue = new();
         private int _contextSyncPending;
+        private CancellationTokenSource? _currentCts;
 
         public void EnqueueSend(ChatSendRequest req) => _sendQueue.Enqueue(req);
         public void RequestContextSync() => Interlocked.Exchange(ref _contextSyncPending, 1);
 
+        /// <summary>Anulează răspunsul în curs (butonul Stop din chat).</summary>
+        public void CancelCurrent()
+        {
+            try { _currentCts?.Cancel(); } catch { }
+        }
+
         public string GetName() => "Normalign Agent";
 
-        // Rulează pe thread-ul Revit (ExternalEvent).
         public void Execute(UIApplication app)
         {
             UIDocument? uidoc = app.ActiveUIDocument;
@@ -54,37 +55,38 @@ namespace NormalignRevitAgent.Revit
 
             while (_sendQueue.TryDequeue(out ChatSendRequest? req))
             {
-                // Context proaspăt, citit ACUM, pe thread-ul Revit.
                 (string fileName, string context) = BuildContext(uidoc);
                 PushContextChip(uidoc);
 
+                var cts = new CancellationTokenSource();
+                _currentCts = cts;
                 ChatSendRequest local = req;
+
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        JsonNode data = await _api.SendChatAsync(local.Message, local.ChatId, fileName, context);
-                        App.Pane?.PostJson(new JsonObject
-                        {
-                            ["type"] = "reply",
-                            ["content"] = data["content"]?.GetValue<string>() ?? "",
-                            ["chatId"] = data["chatId"]?.DeepClone(),
-                            ["followUps"] = data["followUpQuestions"]?.DeepClone(),
-                            ["citations"] = data["metadata"]?["citations"]?.DeepClone(),
-                        });
+                        await _api.SendChatAsync(local.Message, local.ChatId, fileName, context,
+                            local.DeepThink, msg => App.Pane?.PostJson(msg), cts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        App.Pane?.PostJson(new JsonObject { ["type"] = "stopped" });
                     }
                     catch (Exception ex)
                     {
                         App.Pane?.PostJson(new JsonObject { ["type"] = "error", ["message"] = ex.Message });
                     }
+                    finally
+                    {
+                        if (ReferenceEquals(_currentCts, cts)) _currentCts = null;
+                        cts.Dispose();
+                    }
                 });
             }
         }
 
-        /// <summary>
-        /// Actualizează chip-ul de context din caseta de input (doc · view · selecție).
-        /// Doar în context API valid (Execute / evenimente Revit).
-        /// </summary>
+        /// <summary>Chip-ul de context din input (doc · view · selecție) + tema Revit.</summary>
         public void PushContextChip(UIDocument? uidoc)
         {
             Document? doc = uidoc?.Document;
@@ -97,27 +99,30 @@ namespace NormalignRevitAgent.Revit
                 ["file"] = doc != null ? $"{doc.Title}.rvt" : null,
                 ["view"] = doc?.ActiveView?.Name,
                 ["selection"] = selCount,
+                ["theme"] = RevitThemeName(),
             });
         }
 
-        // ── Ce vede agentul: rezumatul modelului + view-ul activ + selecția ──────
+        /// <summary>Tema curentă a interfeței Revit ("dark"/"light").</summary>
+        public static string RevitThemeName()
+        {
+            try { return UIThemeManager.CurrentTheme == UITheme.Light ? "light" : "dark"; }
+            catch { return "dark"; }
+        }
+
+        // ── Context vizibil agentului: view activ + selecție + rezumat model ────
         private (string fileName, string context) BuildContext(UIDocument? uidoc)
         {
             Document? doc = uidoc?.Document;
-            if (doc == null)
-                return ("Model Revit", "Niciun model deschis în Revit.");
+            if (doc == null) return ("Model Revit", "Niciun model deschis în Revit.");
 
             var sb = new StringBuilder();
-
             View? view = doc.ActiveView;
-            if (view != null)
-                sb.AppendLine($"View activ: {view.Name} ({view.ViewType})");
+            if (view != null) sb.AppendLine($"View activ: {view.Name} ({view.ViewType})");
 
             AppendSelection(sb, uidoc!, doc);
-
             sb.AppendLine();
             sb.Append(_tools.GetModelSummary.Execute(doc, "{}"));
-
             return ($"{doc.Title}.rvt", sb.ToString());
         }
 
@@ -132,12 +137,10 @@ namespace NormalignRevitAgent.Revit
             {
                 Element? e = doc.GetElement(id);
                 if (e == null) continue;
-
                 string cat = e.Category?.Name ?? "—";
                 string typeName = (doc.GetElement(e.GetTypeId()) as ElementType)?.Name ?? "";
                 string level = (e.LevelId != ElementId.InvalidElementId
                     ? (doc.GetElement(e.LevelId) as Level)?.Name : null) ?? "";
-
                 var line = new StringBuilder($"  - {cat}: {e.Name}");
                 if (!string.IsNullOrEmpty(typeName) && typeName != e.Name) line.Append($" (tip: {typeName})");
                 if (!string.IsNullOrEmpty(level)) line.Append($", nivel {level}");
