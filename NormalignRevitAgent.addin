@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>Normalign Agent</Name>
+    <!-- Point this at your built DLL. Debug/x64 default output path below. -->
+    <Assembly>C:\Users\nichi\source\repos\NormalignRevitAgent\bin\NormalignRevitAgent.dll</Assembly>
+    <FullClassName>NormalignRevitAgent.App</FullClassName>
+    <ClientId>cd465744-7174-4044-b4e2-69ea01c2a14a</ClientId>
+    <VendorId>NRML</VendorId>
+    <VendorDescription>Normalign</VendorDescription>
+  </AddIn>
+</RevitAddIns>
