@@ -74,8 +74,8 @@ namespace NormalignRevitAgent.Services
                 "<!doctype html><html><head><meta charset='utf-8'><title>Normalign</title>" +
                 "<style>body{background:#0f0f11;color:#e8e6e1;font:15px system-ui;height:100vh;margin:0;" +
                 "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}" +
-                ".m{font:600 26px Georgia,serif}.m span{color:#5e6ad2}</style></head><body>" +
-                "<div class='m'><span>&#10039;</span> Normalign</div>" +
+                ".m{font:600 26px Georgia,serif}</style></head><body>" +
+                "<div class='m'>Normalign</div>" +
                 $"<div style='color:#9d9d9d'>{message}</div></body></html>";
             byte[] buf = Encoding.UTF8.GetBytes(html);
             try

@@ -63,8 +63,7 @@
   /* ── Empty state ────────────────────────────────────────────────────────── */
   #empty{position:absolute;inset:40px 0 128px;display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:14px;pointer-events:none;user-select:none}
-  #empty .mark{font-family:Georgia,"Times New Roman",serif;font-size:22px;font-weight:600;color:var(--foreground)}
-  #empty .mark .ast{color:var(--primary);margin-right:7px}
+  #empty .mark{font-family:Georgia,"Times New Roman",serif;font-size:22px;font-weight:600;color:var(--foreground);letter-spacing:.2px}
   #empty .hint{font-size:12.5px;color:var(--muted-foreground);max-width:300px;text-align:center}
 
   /* ── Mesaje ─────────────────────────────────────────────────────────────── */
@@ -192,7 +191,7 @@
   <div id="scroll"><div id="messages"></div></div>
 
   <div id="empty">
-    <div class="mark"><span class="ast">✳</span>Normalign</div>
+    <div class="mark">Normalign</div>
     <div class="hint">Întreabă despre normative românești sau despre modelul Revit deschis.</div>
   </div>
 
