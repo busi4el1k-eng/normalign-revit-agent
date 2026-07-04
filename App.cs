@@ -1,6 +1,8 @@
 using System;
+using System.IO;
 using System.Reflection;
 using System.Text.Json.Nodes;
+using System.Windows.Media.Imaging;
 using System.Threading;
 using System.Threading.Tasks;
 using Autodesk.Revit.UI;
@@ -105,19 +107,35 @@ namespace NormalignRevitAgent
             // --- panoul dockable ---
             app.RegisterDockablePane(PaneId, "Normalign", new ChatPaneProvider(Pane));
 
-            // --- butonul din ribbon ---
+            // --- butonul din ribbon (unul singur: deschide panoul de chat/agent) ---
             const string tabName = "Normalign";
             try { app.CreateRibbonTab(tabName); } catch { /* tab-ul poate exista deja */ }
 
-            RibbonPanel panel = app.CreateRibbonPanel(tabName, "Agent AI");
+            RibbonPanel panel = app.CreateRibbonPanel(tabName, "Asistent");
             var btn = new PushButtonData(
                 "NormalignChatBtn",
-                "Chat\nNormalign",
+                "Agent AI",
                 Assembly.GetExecutingAssembly().Location,
                 "NormalignRevitAgent.ShowChatCommand")
             {
-                ToolTip = "Deschide asistentul AI Normalign pentru modelul curent."
+                ToolTip = "Asistentul AI Normalign: chat cu citări din normative românești + agent care inspectează și editează modelul deschis.",
+                LongDescription = "Modul Plan — întrebări despre normative (răspuns cu citări din legislație), " +
+                    "despre Revit sau despre modelul deschis; vede live view-ul activ și selecția.\n" +
+                    "Modul Edit — agentul modifică modelul la cerere (parametri, tipuri, mutare, ștergere), " +
+                    "fiecare operație cu Undo separat; pentru ștergeri sau modificări în masă cere " +
+                    "confirmare cu butoane Da/Nu.",
             };
+
+            // Iconițele stau în Assets\ lângă DLL (copiate la build/instalare).
+            string assetsDir = Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!, "Assets");
+            try
+            {
+                btn.LargeImage = new BitmapImage(new Uri(Path.Combine(assetsDir, "icon32.png")));
+                btn.Image = new BitmapImage(new Uri(Path.Combine(assetsDir, "icon16.png")));
+            }
+            catch { /* fără iconiță dacă lipsesc fișierele — butonul rămâne funcțional */ }
+
             panel.AddItem(btn);
 
             return Result.Succeeded;
