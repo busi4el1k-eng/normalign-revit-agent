@@ -39,7 +39,7 @@ WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 
 [Languages]
-Name: "ro"; MessagesFile: "compiler:Languages\Romanian.isl"
+Name: "ro"; MessagesFile: "Romanian.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Files]
