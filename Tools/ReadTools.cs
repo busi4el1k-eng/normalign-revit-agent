@@ -253,6 +253,15 @@ namespace NormalignRevitAgent.Tools
             string? cat = ToolHelpers.Str(ToolHelpers.ParseArgs(argsJson), "category");
             if (cat == null) return ToolHelpers.Error("lipsește category.");
 
+            // Câte instanțe folosește fiecare tip — ca "nefolosit" să fie vizibil direct.
+            var counts = new Dictionary<ElementId, int>();
+            foreach (Element e in new FilteredElementCollector(doc).WhereElementIsNotElementType())
+            {
+                ElementId tid = e.GetTypeId();
+                if (tid == ElementId.InvalidElementId) continue;
+                counts[tid] = counts.TryGetValue(tid, out int n) ? n + 1 : 1;
+            }
+
             var types = new FilteredElementCollector(doc)
                 .WhereElementIsElementType()
                 .Cast<ElementType>()
@@ -264,7 +273,67 @@ namespace NormalignRevitAgent.Tools
 
             var sb = new StringBuilder($"Tipuri în categoria potrivită cu '{cat}' ({types.Count}):\n");
             foreach (ElementType t in types)
-                sb.AppendLine($"  - {t.FamilyName}: {t.Name} [id {t.Id.Value}]");
+            {
+                string usage = counts.TryGetValue(t.Id, out int n) ? $"×{n}" : "nefolosit";
+                sb.AppendLine($"  - {t.FamilyName}: {t.Name} [id {t.Id.Value}] ({usage})");
+            }
+            return sb.ToString();
+        }
+    }
+
+    /// <summary>Detalii de TIP: parametri + structura stratificată (grosimi, materiale).</summary>
+    public class GetTypeDetailsTool : IRevitTool
+    {
+        public string Name => "get_type_details";
+        public string Description => "Detalii pentru tipuri (ElementType) date prin id (din list_family_types / get_element_details): parametrii de tip și, pentru tipuri stratificate (pereți, planșee, acoperișuri), structura compound: straturile cu funcție, material și grosime în cm + grosimea totală. Folosește ÎNAINTE de consolidări de tipuri, ca să compari structurile. Max 10 per apel.";
+        public string InputSchema => """{"type":"object","properties":{"type_ids":{"type":"array","items":{"type":"integer"},"description":"Id-urile tipurilor (ElementType)"}},"required":["type_ids"]}""";
+        public bool IsWrite => false;
+
+        public string Execute(UIApplication app, string argsJson)
+        {
+            Document? doc = app.ActiveUIDocument?.Document;
+            if (doc == null) return ToolHelpers.NoModel;
+            var ids = ToolHelpers.Ids(ToolHelpers.ParseArgs(argsJson), "type_ids");
+            if (ids.Count == 0) return ToolHelpers.Error("lipsesc type_ids.");
+
+            var sb = new StringBuilder();
+            foreach (ElementId id in ids.Take(10))
+            {
+                if (doc.GetElement(id) is not ElementType t)
+                { sb.AppendLine($"[id {id.Value}] — nu e un tip (ElementType)."); continue; }
+
+                sb.AppendLine($"- {t.Category?.Name ?? "—"} / {t.FamilyName}: {t.Name} [id {id.Value}]");
+
+                // Structura stratificată (pereți/planșee/acoperișuri de sistem).
+                if (t is HostObjAttributes host && host.GetCompoundStructure() is CompoundStructure cs)
+                {
+                    const double ftToCm = 30.48;
+                    sb.AppendLine($"  structură ({cs.GetWidth() * ftToCm:0.0} cm total):");
+                    foreach (CompoundStructureLayer layer in cs.GetLayers())
+                    {
+                        string mat = (doc.GetElement(layer.MaterialId) as Material)?.Name ?? "—";
+                        sb.AppendLine($"    · {layer.Function}: {layer.Width * ftToCm:0.0} cm, material {mat}");
+                    }
+                }
+
+                int shown = 0;
+                foreach (Parameter p in t.Parameters)
+                {
+                    if (!p.HasValue || shown >= 20) continue;
+                    string? val = p.StorageType switch
+                    {
+                        StorageType.String => p.AsString(),
+                        StorageType.Integer => p.AsValueString() ?? p.AsInteger().ToString(),
+                        StorageType.Double => p.AsValueString(),
+                        StorageType.ElementId => (doc.GetElement(p.AsElementId()) as Element)?.Name,
+                        _ => null,
+                    };
+                    if (string.IsNullOrWhiteSpace(val)) continue;
+                    sb.AppendLine($"  {p.Definition.Name}: {val}");
+                    shown++;
+                }
+            }
+            if (ids.Count > 10) sb.AppendLine($"… {ids.Count - 10} tipuri omise (max 10 per apel).");
             return sb.ToString();
         }
     }

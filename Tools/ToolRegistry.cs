@@ -26,6 +26,7 @@ namespace NormalignRevitAgent.Tools
                 new GetSelectionTool(),
                 new ListLevelsAndGridsTool(),
                 new ListFamilyTypesTool(),
+                new GetTypeDetailsTool(),
                 new GetActiveViewTool(),
                 new GetModelWarningsTool(),
                 new GetViewSnapshotTool(),
@@ -35,6 +36,7 @@ namespace NormalignRevitAgent.Tools
                 new ChangeElementTypeTool(),
                 new MoveElementsTool(),
                 new DeleteElementsTool(),
+                new PurgeUnusedTypesTool(),
                 new OverrideColorInViewTool(),
                 new IsolateInViewTool(),
             };

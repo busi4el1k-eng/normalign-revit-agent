@@ -188,6 +188,69 @@ namespace NormalignRevitAgent.Tools
         }
     }
 
+    /// <summary>Șterge tipurile fără nicio instanță (echivalentul Purge Unused pe tipuri).</summary>
+    public class PurgeUnusedTypesTool : IRevitTool
+    {
+        public string Name => "purge_unused_types";
+        public string Description => "Șterge tipurile (ElementType) care nu au NICIO instanță în model — echivalentul Purge Unused pentru tipuri, pe categorii de model. Opțional filtrat pe categorie (ex. 'Pereți'). Cu dry_run=true doar listează ce AR fi șters, fără să modifice. Operație în masă → cere confirmarea utilizatorului înainte (fără dry_run).";
+        public string InputSchema => """{"type":"object","properties":{"category":{"type":"string","description":"Numele categoriei (potrivire parțială); lipsă = toate categoriile de model"},"dry_run":{"type":"boolean","description":"true = doar raportează, nu șterge"}}}""";
+        public bool IsWrite => true;
+
+        public string Execute(UIApplication app, string argsJson)
+        {
+            Document? doc = app.ActiveUIDocument?.Document;
+            if (doc == null) return ToolHelpers.NoModel;
+            var args = ToolHelpers.ParseArgs(argsJson);
+            string? cat = ToolHelpers.Str(args, "category");
+            bool dryRun = ToolHelpers.Flag(args, "dry_run");
+
+            // Tipurile folosite = GetTypeId() al fiecărei instanțe din model.
+            var used = new HashSet<ElementId>();
+            foreach (Element e in new FilteredElementCollector(doc).WhereElementIsNotElementType())
+            {
+                ElementId tid = e.GetTypeId();
+                if (tid != ElementId.InvalidElementId) used.Add(tid);
+            }
+
+            var candidates = new FilteredElementCollector(doc)
+                .WhereElementIsElementType()
+                .Cast<ElementType>()
+                .Where(t => t.Category != null && t.Category.CategoryType == CategoryType.Model)
+                .Where(t => cat == null || t.Category!.Name.IndexOf(cat, StringComparison.OrdinalIgnoreCase) >= 0)
+                .Where(t => !used.Contains(t.Id))
+                .OrderBy(t => t.Category!.Name).ThenBy(t => t.FamilyName).ThenBy(t => t.Name)
+                .Take(300)
+                .ToList();
+            if (candidates.Count == 0) return "Niciun tip nefolosit găsit" + (cat != null ? $" în categoria '{cat}'." : ".");
+
+            if (dryRun)
+            {
+                var sbd = new StringBuilder($"{candidates.Count} tipuri nefolosite (dry run, nimic șters):\n");
+                foreach (var g in candidates.GroupBy(t => t.Category!.Name))
+                    sbd.AppendLine($"  {g.Key} ({g.Count()}): " + string.Join(", ", g.Take(25).Select(t => t.Name)) + (g.Count() > 25 ? ", …" : ""));
+                return sbd.ToString();
+            }
+
+            var report = new StringBuilder();
+            int ok = 0;
+            using (var t = new Transaction(doc, "Normalign: purge tipuri nefolosite"))
+            {
+                t.Start();
+                foreach (ElementType et in candidates)
+                {
+                    // Un delete anterior poate șterge în cascadă tipuri dependente.
+                    if (doc.GetElement(et.Id) == null) { ok++; continue; }
+                    string label = $"{et.Category!.Name} / {et.FamilyName}: {et.Name}";
+                    try { doc.Delete(et.Id); ok++; }
+                    catch (Exception ex) { report.AppendLine($"  - {label}: {ex.Message}"); }
+                }
+                if (ok > 0) t.Commit(); else t.RollBack();
+            }
+            string refuzate = report.Length > 0 ? $"\nRefuzate de Revit:\n{report}" : "";
+            return $"{ok}/{candidates.Count} tipuri nefolosite șterse (un singur pas de Undo).{refuzate}";
+        }
+    }
+
     /// <summary>Selectează + centrează view-ul pe elemente (feedback vizual).</summary>
     public class SelectAndShowTool : IRevitTool
     {
