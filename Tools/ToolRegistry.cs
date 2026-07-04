@@ -34,6 +34,9 @@ namespace NormalignRevitAgent.Tools
                 // scriere (doar modul Edit)
                 new SetParametersTool(),
                 new ChangeElementTypeTool(),
+                new PlaceFamilyInstancesTool(),
+                new CreateWallsTool(),
+                new CopyElementsTool(),
                 new MoveElementsTool(),
                 new DeleteElementsTool(),
                 new PurgeUnusedTypesTool(),
