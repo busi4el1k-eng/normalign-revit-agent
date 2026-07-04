@@ -17,6 +17,7 @@ pe site). Construit ca să crească într-un asistent agentic (tool-use) fără 
 7. [Punere în producție](#punere-în-producție)
 8. [Configurare](#configurare)
 9. [Depanare](#depanare)
+10. [Distribuție simplă la prieteni + updates](#distribuție-simplă-la-prieteni-test--cum-faci-updates)
 
 ---
 
@@ -307,3 +308,76 @@ Implicit: `https://normalign.com`. Tokenul de auth **nu** stă aici — e în
   pe server verifică `DESKTOP_TOKEN_SECRET`.
 - **Login nu revine în Revit** → firewall pe loopback (127.0.0.1) sau nu erai
   logat în Clerk în browser. Reîncearcă.
+
+---
+
+## Distribuție simplă la prieteni (test) + cum faci updates
+
+Această secțiune răspunde la două întrebări practice: **cum dau `.exe`-ul la câțiva
+prieteni ca să testeze** și **cum le trimit updates după aceea** — pentru că, la
+prima vedere, pare că odată rulat `.exe`-ul nu mai ai control asupra lui. Ai — și
+încă mai mult decât te aștepți. Vezi mai jos de ce.
+
+### 1. Trimite `.exe`-ul (fără website, fără cloud)
+
+1. Construiește o dată installer-ul:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
+   ```
+   → `installer\Output\NormalignRevitAgent-Setup-1.0.0.exe` (~4 MB).
+2. Trimite acel `.exe` prietenilor (WhatsApp/Telegram/email/WeTransfer — orice).
+3. Ei: dublu-click → *More info → Run anyway* la avertismentul SmartScreen (exe-ul
+   e nesemnat, e normal) → instalare per-user fără admin → pornesc Revit →
+   **Always Load** → tab Normalign → **Conectează-te** (cont Normalign) → gata.
+
+**Condiție unică:** prietenii au nevoie ca **backend-ul să fie accesibil pe
+`https://normalign.com`** (asta e adresa implicită când nu există `config.json`).
+Serverul tău local (`localhost:3000`) NU e vizibil pentru ei. Deci înainte de a
+distribui: fă deploy backend-ului pe normalign.com (inclusiv regulile de agent din
+`digital-standart-web/src/lib/prompts/revit.ts` și `DESKTOP_TOKEN_SECRET` setat).
+
+### 2. Modelul de control — ce controlezi și de unde
+
+Add-in-ul e **subțire**: el doar citește modelul Revit și afișează chat-ul.
+Toată „inteligența" (Claude, RAG, prompturile, regulile agentului, căutarea în
+normative) stă pe **serverul tău**. De aici rezultă un lucru important:
+
+| Ce vrei să schimbi | Unde trăiește | Cum ajunge la prieteni |
+|--------------------|---------------|------------------------|
+| Comportamentul agentului (cât e de autonom, ce întreabă) | server (`revit.ts`) | **deploy backend → instant, la toți**, fără să atingi PC-ul lor |
+| Prompturi, ton, stiluri de răspuns | server | idem — instant |
+| Baza de normative / fișe tehnice, căutarea | server (Qdrant) | idem — instant |
+| Tool-urile de căutare documentară | server (`/api/agent`) | idem — instant |
+| **Tool-uri Revit noi** (plasare, pereți, purge…) | add-in (DLL) | `.exe` nou (vezi mai jos) |
+| **UI-ul de chat**, ribbon, iconițe, login | add-in (DLL/HTML) | `.exe` nou |
+
+Cu alte cuvinte: **80% din „cât de deștept e agentul" îl controlezi de pe server**,
+oricând, pentru toți utilizatorii deodată, fără ca ei să reinstaleze nimic. Nu ai
+pierdut controlul — l-ai centralizat. Doar capabilitățile care ating direct API-ul
+Revit (tool-uri noi, UI) cer un `.exe` nou.
+
+### 3. Cum trimiți un update de add-in (`.exe` nou)
+
+Când ai modificat ceva în add-in (un tool Revit nou, UI etc.):
+
+1. Crește versiunea în `installer\normalign-revit-agent.iss`:
+   ```
+   #define AppVersion "1.1.0"
+   ```
+2. Rebuild: `powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1`.
+3. Trimite noul `.exe`. Prietenul îl rulează → **se instalează peste cel vechi
+   automat** (același `AppId` intern → Inno Setup detectează versiunea existentă și
+   o înlocuiește; nu trebuie să dezinstaleze manual). Repornește Revit → gata.
+   Tokenul de login rămâne (e în `auth.dat`, nu-l atinge installer-ul).
+
+> **Idee de viitor (auto-update):** add-in-ul poate verifica la pornire o rută de
+> versiune de pe server (ex. `GET /api/desktop/latest-version`) și, dacă e una mai
+> nouă, să-i arate utilizatorului un buton „Actualizează" care descarcă și rulează
+> noul `.exe`. Nu e implementat încă — deocamdată updates de add-in se trimit
+> manual. Dar fiindcă majoritatea îmbunătățirilor sunt server-side, vei retrimite
+> `.exe`-ul rar (doar la tool-uri/UI noi), nu la fiecare ajustare de comportament.
+
+### 4. Dezinstalare (pentru prieteni)
+Setări Windows → Aplicații → „Normalign Revit Agent" → Uninstall. Sau șterge folderul
+`%APPDATA%\Autodesk\Revit\Addins\2027\NormalignRevitAgent` + manifestul `.addin` de
+lângă el. Tokenul criptat rămâne în `%APPDATA%\NormalignRevitAgent` până la logout.
