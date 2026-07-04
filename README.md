@@ -238,10 +238,50 @@ Repornește Revit → **Always Load** → tab **Normalign** → **Chat**. Loghea
 3. `config.json` implicit lipsește → add-in-ul folosește `https://normalign.com`.
    (Pentru un URL diferit, distribuie și un `config.json` sau lasă utilizatorul să-l creeze.)
 
-### C. Distribuție
-Trimite `.exe`-ul utilizatorilor. La dublu-click: instalare per-user (fără admin),
-instalează WebView2 dacă lipsește, pune add-in-ul în `%APPDATA%\...\Addins\2027`.
-La prima pornire a Revit → **Always Load** → login în browser → gata.
+### C. Distribuție — download de pe normalign.com
+
+Fluxul recomandat (installer-ul e static, nu are nevoie de server propriu):
+
+1. **Build**: `powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1`
+   → `installer\Output\NormalignRevitAgent-Setup-<versiune>.exe`.
+2. **Checksum** (pentru pagina de download):
+   ```powershell
+   Get-FileHash installer\Output\NormalignRevitAgent-Setup-1.0.0.exe -Algorithm SHA256
+   ```
+3. **Upload pe DigitalOcean Spaces** (același bucket folosit deja pentru PDF-uri),
+   în folderul `downloads/`, cu acces public-read:
+   ```bash
+   aws s3 cp installer/Output/NormalignRevitAgent-Setup-1.0.0.exe \
+     s3://digital-standart-lib/downloads/ \
+     --endpoint-url https://fra1.digitaloceanspaces.com --acl public-read
+   ```
+   URL-ul de download devine:
+   `https://digital-standart-lib.fra1.cdn.digitaloceanspaces.com/downloads/NormalignRevitAgent-Setup-1.0.0.exe`
+4. **Buton pe site**: o pagină/secțiune „Descarcă add-in-ul Revit" pe normalign.com
+   care trimite la URL-ul CDN + afișează SHA-256 și versiunea. Site-ul nu servește
+   fișierul — doar linkul; nu crește imaginea Docker și versiunile noi nu cer
+   redeploy (doar actualizarea linkului dacă se schimbă numele fișierului).
+5. **Versiuni noi**: crești `AppVersion` în `installer\normalign-revit-agent.iss`,
+   rebuild, upload lângă cele vechi (numele conține versiunea), actualizezi linkul.
+
+**Utilizatorul final**: descarcă → dublu-click → instalare per-user fără admin
+(WebView2 se instalează automat) → pornește Revit → **Always Load** → tab
+Normalign → login în browser cu contul Normalign → gata.
+
+**Securitate la distribuție:**
+- Installer-ul **nu conține niciun secret** — nici chei API, nici tokenuri;
+  autentificarea se face per-utilizator, în browser, iar tokenul rezultat se
+  salvează criptat DPAPI pe stația lui.
+- Download-ul e servit prin **HTTPS** (CDN); publică SHA-256 pe pagină ca
+  utilizatorii să poată verifica integritatea.
+- `.exe`-ul e **nesemnat** → Windows SmartScreen va arăta „Unknown publisher";
+  utilizatorul trebuie să apese *More info → Run anyway*. Pentru distribuție
+  serioasă, semnează codul (Azure Trusted Signing ~10 $/lună sau certificat
+  OV/EV clasic) — elimină avertismentul și e singura îmbunătățire de securitate
+  reală rămasă pe partea de client.
+- Serverul nu are încredere în client: toate rutele API cer Bearer token valid
+  (HMAC cu `DESKTOP_TOKEN_SECRET`), deci un `.exe` modificat de un atacator nu
+  poate accesa decât contul celui care se loghează cu el.
 
 > Alt Revit (2026/2028): schimbă `RevitYear` în `.iss` și, dacă e alt .NET,
 > `TargetFramework` în `.csproj` (Revit 2027 = .NET 10).
