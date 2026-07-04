@@ -9,13 +9,14 @@ pe site). Construit ca să crească într-un asistent agentic (tool-use) fără 
 
 ## Cuprins
 1. [Cum arată / ce face](#cum-arată--ce-face)
-2. [Arhitectura pe scurt](#arhitectura-pe-scurt)
-3. [Harta fișierelor (ce e unde)](#harta-fișierelor-ce-e-unde)
-4. [Cum funcționează autentificarea](#cum-funcționează-autentificarea)
-5. [Rulare locală (dev)](#rulare-locală-dev)
-6. [Punere în producție](#punere-în-producție)
-7. [Configurare](#configurare)
-8. [Depanare](#depanare)
+2. [Cum se folosește (ghid utilizator)](#cum-se-folosește-ghid-utilizator)
+3. [Arhitectura pe scurt](#arhitectura-pe-scurt)
+4. [Harta fișierelor (ce e unde)](#harta-fișierelor-ce-e-unde)
+5. [Cum funcționează autentificarea](#cum-funcționează-autentificarea)
+6. [Rulare locală (dev)](#rulare-locală-dev)
+7. [Punere în producție](#punere-în-producție)
+8. [Configurare](#configurare)
+9. [Depanare](#depanare)
 
 ---
 
@@ -30,15 +31,72 @@ pe site). Construit ca să crească într-un asistent agentic (tool-use) fără 
     Revit („cum fac o secțiune?") — serverul detectează intenția și sare peste RAG.
   - **Edit** = buclă agentică (Claude tool-use prin `/api/agent`): agentul inspectează
     modelul (interogări filtrate, detalii de elemente, avertismente, captură de view
-    pentru vision) și îl **modifică** (parametri, mutare, ștergere, evidențiere,
-    izolare) — fiecare operație în tranzacția ei, cu Undo separat în Revit. UI-ul
-    arată live tool-urile rulate.
+    pentru vision) și îl **modifică** (parametri, schimbare de tip, mutare, ștergere,
+    evidențiere, izolare) — fiecare operație în tranzacția ei, cu Undo separat în
+    Revit. UI-ul arată live tool-urile rulate. Serverul primește la fiecare rundă
+    istoricul conversației (din Postgres), deci agentul ține minte ce a propus.
+    - **Agent autonom (stil Claude Code)**: agentul decide singur pașii, își asumă
+      ipoteze rezonabile și execută — nu dă indicații de interfață pentru lucruri
+      pe care le poate face el, nu pune întrebări deschise și nu oferă meniuri de
+      opțiuni. Modificările punctuale cerute explicit le face direct.
+    - **Confirmare Da/Nu**: doar înainte de ștergeri sau modificări în masă, agentul
+      propune planul și încheie cu o linie `[CONFIRMĂ] …`, pe care UI-ul o
+      transformă în butoane de aprobare/refuz. „Da" aprobă **obiectivul**: dacă pe
+      parcurs realitatea diferă de ipoteze, agentul adaptează planul și merge până
+      la capăt, la același nivel de risc — re-întreabă doar dacă acțiunea devine
+      categoric mai riscantă decât cea aprobată.
 - **Buton Stop** — butonul de trimitere devine stop în timpul generării.
 - **Citări/surse clicabile** → reader peste chat: normativele au taburi
   **Conținut (markdown) + PDF** (`#page=N`), fișele tehnice au **Conținut** (nu există
   PDF pentru ele); navigare pe pagini, imagini de pe CDN.
 - **Istoric conversații** — același cont și aceleași chat-uri ca pe web.
 - **Login în browser** (fără parole/chei în add-in) + **Logout**.
+
+---
+
+## Cum se folosește (ghid utilizator)
+
+### Instalare (utilizator final)
+1. Primești `NormalignRevitAgent-Setup-<versiune>.exe` → dublu-click. Instalare
+   per-user, **fără drepturi de admin**; instalează automat WebView2 dacă lipsește.
+2. Pornește Revit 2027 → la întrebarea de încărcare a add-in-ului alege **Always Load**.
+3. Tab-ul **Normalign** apare în ribbon → apasă **Chat** → panoul se deschide în dreapta.
+4. **Conectează-te** → se deschide browserul, te loghezi cu contul Normalign
+   (același ca pe [normalign.com](https://normalign.com)) → panoul comută automat pe chat.
+   Login-ul se face o singură dată per stație.
+
+### Lucrul de zi cu zi
+- **Modul Plan** (implicit) — întrebări și analiză, fără modificări:
+  - întrebări normative („ce lățime minimă are un coridor de evacuare?") → răspuns
+    cu citări clicabile din normative (reader cu Conținut + PDF);
+  - întrebări despre Revit („cum fac o secțiune?") → pași concreți în interfață;
+  - întrebări despre modelul deschis („câte uși am pe nivelul 1?") — panoul vede
+    live modelul, view-ul activ și selecția;
+  - sub-modul **Aprofundat**: analiză extinsă cu raționament vizibil (mai lentă).
+- **Modul Edit** — agentul **modifică modelul** la cerere:
+  - formulezi obiectivul („redenumește camerele după destinație", „șterge pereții
+    duplicați", „consolidează tipurile de pereți importate din IFC") și agentul
+    inspectează modelul, decide pașii și execută;
+  - modificările mici, cerute explicit, le face **direct**; pentru ștergeri sau
+    modificări în masă primești o bară **Da / Nu** — un click și execută tot;
+  - fiecare operație e o tranzacție separată → **Ctrl+Z** anulează pas cu pas;
+  - selecția din Revit contează: „peretele ăsta" = ce ai selectat acum.
+- **Stop** — butonul de trimitere devine ■ în timpul generării; îl apeși și agentul
+  se oprește (ce a apucat să modifice rămâne, cu Undo disponibil).
+- **Istoric** — aceleași conversații ca pe site; le poți continua din oricare client.
+
+### Ce poate atinge agentul în model (modul Edit)
+| Acțiune | Tool | Direct sau cu confirmare? |
+|---------|------|---------------------------|
+| Setare parametri (nume, comentarii, valori cu unități) | `set_parameters` | direct, dacă e punctual |
+| Schimbare tip / Family and Type | `change_element_type` | direct punctual; confirmare în masă |
+| Mutare elemente (vector în mm) | `move_elements` | direct, dacă e punctual |
+| Ștergere elemente | `delete_elements` | **întotdeauna cu confirmare** |
+| Evidențiere color / izolare în view | `override_color_in_view`, `isolate_in_view` | direct (nu ating geometria) |
+| Selectare + centrare view | `select_and_show` | direct (doar UI) |
+
+Citirea (interogări, detalii, niveluri, tipuri, avertismente, capturi de view
+pentru vision) nu necesită niciodată confirmare.
 
 ---
 
@@ -96,7 +154,7 @@ citește modelul Revit (pe thread-ul Revit, prin `ExternalEvent`) și hostează 
 | `Tools/IRevitTool.cs`, `ToolRegistry.cs` | Registrul de capabilități: nume + descriere + **JSON Schema** per tool, `Declare(includeWrite)` produce lista pentru `/api/agent`; tool-urile de scriere se declară doar în Edit. |
 | `Tools/GetModelSummaryTool.cs` | Rezumatul modelului (niveluri cu cote, categorii, camere cu arii, tipuri de pereți) — folosit și ca `ifcContext.summary` la chat. |
 | `Tools/ReadTools.cs` | Tool-uri de citire: `query_elements` (filtre combinabile), `get_element_details`, `get_selection`, `list_levels_and_grids`, `list_family_types`, `get_active_view`, `get_model_warnings`. |
-| `Tools/WriteTools.cs` | Tool-uri de scriere (doar Edit, fiecare în `Transaction` proprie → Undo separat): `set_parameters`, `move_elements`, `delete_elements`, `override_color_in_view`, `isolate_in_view`; plus `select_and_show` (nu modifică modelul). |
+| `Tools/WriteTools.cs` | Tool-uri de scriere (doar Edit, fiecare în `Transaction` proprie → Undo separat): `set_parameters`, `change_element_type` (schimbă Family and Type, inclusiv între familii din aceeași categorie — ex. consolidarea pereților importați din IFC), `move_elements`, `delete_elements`, `override_color_in_view`, `isolate_in_view`; plus `select_and_show` (nu modifică modelul). |
 | `Tools/GetViewSnapshotTool.cs` | Exportă view-ul activ ca PNG → base64 → bloc de imagine pentru Claude (**vision** pe desen). |
 | `install.ps1` / `install.bat` | Build + copiere în `%APPDATA%\Autodesk\Revit\Addins\2027` (dev, fără admin). |
 | `installer/normalign-revit-agent.iss` | **Installer production** (Inno Setup): per-user, instalează WebView2 dacă lipsește, fără secrete. |

@@ -80,6 +80,52 @@ namespace NormalignRevitAgent.Tools
         }
     }
 
+    /// <summary>Schimbă tipul (ElementType) unor elemente — inclusiv între familii din aceeași categorie.</summary>
+    public class ChangeElementTypeTool : IRevitTool
+    {
+        public string Name => "change_element_type";
+        public string Description => "Schimbă tipul (Family and Type) elementelor date la un tip țintă dat prin id (vezi list_family_types). Funcționează și între familii diferite din aceeași categorie (ex. consolidarea pereților importați din IFC pe un singur tip), dacă tipul e valid pentru element. Raportează per element dacă a reușit.";
+        public string InputSchema => """{"type":"object","properties":{"element_ids":{"type":"array","items":{"type":"integer"}},"type_id":{"type":"integer","description":"Id-ul tipului țintă (ElementType) — din list_family_types sau get_element_details"}},"required":["element_ids","type_id"]}""";
+        public bool IsWrite => true;
+
+        public string Execute(UIApplication app, string argsJson)
+        {
+            Document? doc = app.ActiveUIDocument?.Document;
+            if (doc == null) return ToolHelpers.NoModel;
+            var args = ToolHelpers.ParseArgs(argsJson);
+            var ids = ToolHelpers.Ids(args);
+            if (ids.Count == 0) return ToolHelpers.Error("lipsesc element_ids.");
+            long typeIdVal = (long)ToolHelpers.Num(args, "type_id", -1);
+            if (typeIdVal < 0) return ToolHelpers.Error("lipsește type_id.");
+            var typeId = new ElementId(typeIdVal);
+            if (doc.GetElement(typeId) is not ElementType targetType)
+                return ToolHelpers.Error($"type_id {typeIdVal} nu e un tip (ElementType) din proiect.");
+
+            var report = new StringBuilder();
+            int ok = 0;
+            using (var t = new Transaction(doc, "Normalign: schimbare tip elemente"))
+            {
+                t.Start();
+                foreach (ElementId id in ids.Take(200))
+                {
+                    Element? e = doc.GetElement(id);
+                    if (e == null) { report.AppendLine($"  - [id {id.Value}] nu există"); continue; }
+                    try
+                    {
+                        if (!e.GetValidTypes().Contains(typeId))
+                        { report.AppendLine($"  - [id {id.Value}] tipul '{targetType.Name}' nu e valid pentru acest element"); continue; }
+                        e.ChangeTypeId(typeId);
+                        ok++;
+                        report.AppendLine($"  - [id {id.Value}] → {targetType.FamilyName}: {targetType.Name} ✓");
+                    }
+                    catch (Exception ex) { report.AppendLine($"  - [id {id.Value}] {ex.Message}"); }
+                }
+                if (ok > 0) t.Commit(); else t.RollBack();
+            }
+            return $"{ok}/{ids.Count} elemente au primit tipul '{targetType.Name}':\n{report}";
+        }
+    }
+
     /// <summary>Mută elemente cu un vector dat în milimetri.</summary>
     public class MoveElementsTool : IRevitTool
     {

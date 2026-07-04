@@ -32,6 +32,7 @@ namespace NormalignRevitAgent.Tools
                 new SelectAndShowTool(),
                 // scriere (doar modul Edit)
                 new SetParametersTool(),
+                new ChangeElementTypeTool(),
                 new MoveElementsTool(),
                 new DeleteElementsTool(),
                 new OverrideColorInViewTool(),
